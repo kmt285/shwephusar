@@ -1,0 +1,636 @@
+import os
+import logging
+import io
+from dotenv import load_dotenv
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from keep_alive import keep_alive
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+from motor.motor_asyncio import AsyncIOMotorClient
+from datetime import datetime, timedelta
+
+# Load Environment Variables
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URI = os.getenv("MONGO_URI")
+ADMIN_ID = os.getenv("ADMIN_ID")
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Database Setup
+db_client = AsyncIOMotorClient(MONGO_URI)
+db = db_client.match_bot_db
+users_collection = db.users
+
+# Conversation States (AGE နဲ့ CITY ထပ်တိုးထားပါတယ်)
+NAME, GENDER, LOOKING_FOR, AGE, CITY, BIO, PHOTO = range(7)
+
+# ==========================================
+# 1. Registration Flow
+# ==========================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message.from_user.username:
+        await update.message.reply_text(
+            "⚠️ သင့်အကောင့်မှာ Telegram Username မရှိသေးပါ။\n"
+            "Match ဖြစ်တဲ့အခါ အခြားသူများက သင့်ကို ဆက်သွယ်နိုင်ရန် Settings > Username မှာ အရင်သွားရောက် သတ်မှတ်ပေးပါ။\n\n"
+            "သတ်မှတ်ပြီးပါက /start ကို ပြန်နှိပ်ပါ။"
+        )
+        return ConversationHandler.END
+        
+    user_id = update.message.from_user.id
+    existing_user = await users_collection.find_one({"user_id": user_id})
+    
+    # User လည်းရှိတယ်၊ Edit လုပ်နေတာလည်း မဟုတ်ဘူးဆိုရင်သာ တားပါမယ်
+    if existing_user and not existing_user.get("is_editing", False):
+        await update.message.reply_text(
+            f"မင်္ဂလာပါ {existing_user['name']} ခင်ဗျာ။ သင်က Profile ရှိပြီးသားဖြစ်ပါတယ်။ ဖူးစာရှင်ရှာဖို့ /match ကို နှိပ်ပါ။"
+        )
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text(
+            "Shwe Phusar (ရွှေဖူးစာ)မှကြိုဆိုပါတယ်။ 💖\n"
+            "ဖူးစာရှင်ရှာဖွေနိုင်ရန် သင့်ရဲ့ Profile ကို အရင်တည်ဆောက်ပါ။\n\n"
+            "သင့်နာမည် ဘယ်လိုခေါ်လဲ?"
+        )
+        return NAME
+
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['name'] = update.message.text
+    keyboard = [
+        [InlineKeyboardButton("👦 ကျား", callback_data="Male"), InlineKeyboardButton("👧 မ", callback_data="Female")]
+    ]
+    await update.message.reply_text("သင်က ကျား လား? မ လား?", reply_markup=InlineKeyboardMarkup(keyboard))
+    return GENDER
+
+async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    context.user_data['gender'] = query.data
+    keyboard = [
+        [InlineKeyboardButton("👦 ကျား", callback_data="Male"), InlineKeyboardButton("👧 မ", callback_data="Female"), InlineKeyboardButton("🌈 နှစ်မျိုးလုံး", callback_data="Both")]
+    ]
+    await query.edit_message_text("သင်က ဘယ်လိုဖူးစာရှင်ကို ရှာနေတာလဲ?", reply_markup=InlineKeyboardMarkup(keyboard))
+    return LOOKING_FOR
+
+async def get_looking_for(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    context.user_data['looking_for'] = query.data
+    
+    # အသက် တောင်းမယ့်အဆင့်
+    await query.edit_message_text("သင့်အသက် ဘယ်လောက်ရှိပြီလဲ? (ဂဏန်းဖြင့်သာ ရိုက်ထည့်ပါ၊ ဥပမာ - 20)")
+    return AGE
+
+async def get_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['age'] = update.message.text
+    
+    # မြို့ တောင်းမယ့်အဆင့်
+    await update.message.reply_text("သင်ဘယ်မြို့ကလဲ? (ဥပမာ - ရန်ကုန်, မန္တလေး)")
+    return CITY
+
+async def get_city(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['city'] = update.message.text
+    
+    await update.message.reply_text("သင့်အကြောင်း အနည်းငယ် (သို့) သင်ရှာဖွေနေတဲ့သူရဲ့ ပုံစံကို စာတိုလေး ရေးပေးပါ။")
+    return BIO
+
+async def get_bio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['bio'] = update.message.text
+    await update.message.reply_text("နောက်ဆုံးအနေနဲ့ သင့်ရဲ့ Profile အတွက် အကောင်းဆုံး ဓာတ်ပုံတစ်ပုံကို ပို့ပေးပါ။ (Photo အနေနဲ့ပို့ပေးပါ)")
+    return PHOTO
+
+async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    photo_file_id = update.message.photo[-1].file_id
+    user_id = update.message.from_user.id
+    
+    # အသစ်ထည့်တာ (insert_one) အစား Update လုပ်တာ (update_one) ကို ပြောင်းသုံးပါမယ်
+    await users_collection.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {
+                # $set ထဲက အချက်အလက်တွေက Profile ပြင်တိုင်း အမြဲတမ်း Update ဖြစ်ပါမယ်
+                "username": update.message.from_user.username,
+                "name": context.user_data['name'],
+                "gender": context.user_data['gender'],
+                "looking_for": context.user_data['looking_for'],
+                "age": context.user_data['age'],
+                "city": context.user_data['city'],
+                "bio": context.user_data['bio'],
+                "photo_id": photo_file_id,
+                "is_editing": False  # Edit လုပ်တာ ပြီးဆုံးသွားပြီဖြစ်ကြောင်း မှတ်သားမယ်
+            },
+            "$setOnInsert": {
+                # $setOnInsert ကတော့ ပထမဆုံးအကြိမ် Bot ကို စသုံးတဲ့သူတွေအတွက် "တစ်ကြိမ်" သာ အလုပ်လုပ်ပါမယ်
+                "likes": [],     
+                "passed": [],    
+                "matches": [],
+                "coins": 5,          # ပထမဆုံးအကြိမ်သာ ၅ ခုပေးမယ်
+                "last_daily": None
+            }
+        },
+        upsert=True # User မရှိရင် အသစ်တည်ဆောက်မယ်၊ ရှိရင် Update လုပ်မယ်လို့ အဓိပ္ပာယ်ရပါတယ်
+    )
+    
+    await update.message.reply_text("🎉 Profile အောင်မြင်စွာ တည်ဆောက်ပြီးပါပြီ!\nဖူးစာရှင် စတင်ရှာဖွေရန် : /match ကိုနှိပ်ပါ။")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Profile ဖန်တီးခြင်းကို ရပ်ဆိုင်းလိုက်ပါပြီ။")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# ==========================================
+# 2. Matching Engine (Priority Logic ဖြင့်)
+# ==========================================
+
+async def show_next_profile(current_user, update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    seen_users = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', [])
+    seen_users.append(current_user['user_id']) 
+    
+    # အခြေခံစစ်ထုတ်မှု (Gender ကိုက်ညီမှု)
+    base_query = {"user_id": {"$nin": seen_users}}
+    if current_user['looking_for'] != "Both":
+        base_query['gender'] = current_user['looking_for']
+    base_query['looking_for'] = {"$in": [current_user['gender'], "Both"]}
+    
+    target_user = None
+
+    # Priority 1: ကျား/မ + မြို့ + အသက် အကုန်တူသူကို အရင်ရှာမယ်
+    if current_user.get('city') and current_user.get('age'):
+        query_1 = base_query.copy()
+        query_1['city'] = current_user['city']
+        query_1['age'] = current_user['age']
+        target_user = await users_collection.find_one(query_1)
+        
+    # Priority 2: အသက်မတူရင်တောင် ကျား/မ + မြို့ တူသူကို ဒုတိယရှာမယ်
+    if not target_user and current_user.get('city'):
+        query_2 = base_query.copy()
+        query_2['city'] = current_user['city']
+        target_user = await users_collection.find_one(query_2)
+
+    # Priority 3: မြို့ပါမတူရင် ကျား/မ တူသူကိုပဲ တတိယရှာမယ်
+    if not target_user:
+        target_user = await users_collection.find_one(base_query)
+    
+    # Second Chance (လူသစ်ကုန်သွားရင် Pass ထားတဲ့သူကို ပြန်ပြမယ်)
+    if not target_user and current_user.get('passed'):
+        second_chance_seen = current_user.get('likes', []) + current_user.get('matches', [])
+        second_chance_seen.append(current_user['user_id'])
+        
+        query_second = {"user_id": {"$nin": second_chance_seen}}
+        if current_user['looking_for'] != "Both":
+            query_second['gender'] = current_user['looking_for']
+        query_second['looking_for'] = {"$in": [current_user['gender'], "Both"]}
+        
+        target_user = await users_collection.find_one(query_second)
+        if target_user:
+            await users_collection.update_one({"user_id": current_user['user_id']}, {"$set": {"passed": []}})
+
+    if target_user:
+        caption = (
+            f"👤 Name: {target_user['name']}\n"
+            f"✨ Age: {target_user.get('age', '-')} နှစ်\n"
+            f"📍 City: {target_user.get('city', 'မသိပါ')}\n"
+            f"🚻 Gender: {target_user['gender']}\n"
+            f"📝 Bio: {target_user.get('bio', 'မရှိပါ')}"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("❌ Pass", callback_data=f"pass_{target_user['user_id']}"),
+                InlineKeyboardButton("❤️ Like", callback_data=f"like_{target_user['user_id']}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if is_callback:
+            await update.callback_query.message.delete()
+            await context.bot.send_photo(
+                chat_id=update.callback_query.message.chat_id,
+                photo=target_user['photo_id'],
+                caption=caption,
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_photo(photo=target_user['photo_id'], caption=caption, reply_markup=reply_markup)
+    else:
+        text = "😔 လောလောဆယ် သင့်အတွက် ကိုက်ညီမယ့်သူ အသစ်မရှိတော့ပါ။ ခဏနေမှ /match ကို ပြန်နှိပ်ကြည့်ပါ!"
+        if is_callback:
+            await update.callback_query.message.delete()
+            await context.bot.send_message(chat_id=update.callback_query.message.chat_id, text=text)
+        else:
+            await update.message.reply_text(text)
+
+async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    current_user = await users_collection.find_one({"user_id": user_id})
+    if not current_user:
+        await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပြီး အရင်ဖန်တီးပါ။")
+        return
+    await update.message.reply_text("🔍 သင့်အတွက် ကိုက်ညီမယ့် ဖူးစာရှင်ကို ရှာဖွေနေပါတယ်...")
+    await show_next_profile(current_user, update, context)
+
+async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data 
+    action, target_user_id_str = data.split("_")
+    target_user_id = int(target_user_id_str)
+    current_user_id = query.from_user.id
+    
+    if action == "pass":
+        await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"passed": target_user_id}})
+    elif action == "like":
+        await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"likes": target_user_id}})
+        
+        target_user = await users_collection.find_one({"user_id": target_user_id})
+        if target_user and current_user_id in target_user.get("likes", []):
+            await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"matches": target_user_id}})
+            await users_collection.update_one({"user_id": target_user_id}, {"$addToSet": {"matches": current_user_id}})
+            
+            # HTML format နဲ့ Error ရှင်းထားတဲ့အပိုင်း
+            target_username = f"@{target_user['username']}" if target_user.get('username') else target_user['name']
+            await context.bot.send_message(
+                chat_id=current_user_id,
+                text=f"🎉 <b>ဖူးစာရှင်ရှာတွေ့သွားပါပြီ!</b>\nသင်နဲ့ {target_user['name']} တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {target_username}",
+                parse_mode="HTML"
+            )
+            
+            current_user = await users_collection.find_one({"user_id": current_user_id})
+            current_username = f"@{current_user['username']}" if current_user.get('username') else current_user['name']
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user_id,
+                    text=f"🎉 <b>ဖူးစာရှင် အသစ် ရပါပြီ!</b>\n{current_user['name']} နဲ့ သင်တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {current_username}",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Failed to send match notification to {target_user_id}: {e}")
+
+    current_user_updated = await users_collection.find_one({"user_id": current_user_id})
+    await show_next_profile(current_user_updated, update, context, is_callback=True)
+
+
+# ==========================================
+# 3. My Profile System
+# ==========================================
+
+async def my_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user = await users_collection.find_one({"user_id": user_id})
+    
+    if not user:
+        await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပြီး အရင်ဖန်တီးပါ။")
+        return
+        
+    caption = (
+        f"🌟 သင့်ရဲ့ လက်ရှိ Profile 🌟\n\n"
+        f"👤 Name: {user['name']} ({user.get('age', '-')} နှစ်)\n"
+        f"📍 City: {user.get('city', 'မသိပါ')}\n"
+        f"🚻 Gender: {user['gender']}\n"
+        f"🔍 Looking: {user['looking_for']}\n"
+        f"📝 Bio: {user.get('bio', 'မရှိပါ')}"
+    )
+    
+    keyboard = [[InlineKeyboardButton("✏️ Profile အသစ်ပြင်မည်", callback_data="edit_profile")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_photo(photo=user['photo_id'], caption=caption, reply_markup=reply_markup)
+
+async def handle_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    # ဖျက်မယ့်အစား is_editing: True လို့ သတ်မှတ်ပါမယ် (ဒါမှ Coin တွေ၊ Match တွေ မပျောက်မှာပါ)
+    await users_collection.update_one({"user_id": user_id}, {"$set": {"is_editing": True}})
+    
+    await query.message.delete()
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="✅ သင့် Profile အချက်အလက်ဟောင်းများကို ပြင်ဆင်ရန် အသင့်ဖြစ်ပါပြီ။\nအချက်အလက်များ အသစ်ပြန်လည် ဖြည့်စွက်ရန် /start ကို နှိပ်ပါ။"
+    )
+
+async def get_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin မှ User စာရင်းနှင့် အရေအတွက်ကို txt ဖိုင်ဖြင့် ထုတ်ယူမည့် Function (/user)"""
+    user_id = update.message.from_user.id
+    
+    # Admin ဟုတ်/မဟုတ် စစ်ဆေးခြင်း
+    if str(user_id) != str(ADMIN_ID):
+        await update.message.reply_text("⛔Access Denied!")
+        return
+
+    # Database ထဲက User အားလုံးကို ဆွဲထုတ်ခြင်း
+    users = await users_collection.find().to_list(length=None)
+    total_users = len(users)
+
+    if total_users == 0:
+        await update.message.reply_text("လောလောဆယ် Bot အသုံးပြုသူ မရှိသေးပါ။")
+        return
+
+    # txt ဖိုင်ထဲတွင် ရေးမည့် စာသားများကို စီစဉ်ခြင်း
+    file_content = f"=== LeoMatch Bot Users List ===\n"
+    file_content += f"Total Users: {total_users}\n"
+    file_content += f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    file_content += "=" * 40 + "\n\n"
+
+    for idx, user in enumerate(users, 1):
+        name = user.get("name", "Unknown")
+        # Username မရှိရင် 'မရှိပါ' လို့ ပြမယ်
+        username = f"@{user.get('username')}" if user.get("username") else "မရှိပါ"
+        uid = user.get("user_id", "Unknown")
+        gender = user.get("gender", "-")
+        coins = user.get("coins", 0)
+        
+        # User တစ်ယောက်ချင်းစီရဲ့ အချက်အလက်ကို စာကြောင်းတစ်ကြောင်းစီ ထည့်မယ်
+        file_content += f"{idx}. Name: {name} | Username: {username} | Gender: {gender} | Coins: {coins} | UserID: {uid}\n"
+
+    # စာသားများကို Memory ထဲတွင် txt ဖိုင်အဖြစ် ဖန်တီးခြင်း
+    txt_file = io.BytesIO(file_content.encode('utf-8'))
+    txt_file.name = "bot_users_list.txt"
+
+    # Admin ထံသို့ စာနှင့်တကွ ဖိုင်ကို ပို့ဆောင်ခြင်း
+    await update.message.reply_text(f"📊 စုစုပေါင်း Bot အသုံးပြုသူ: <b>{total_users}</b> ဦး\nအသေးစိတ်ကို အောက်ပါ txt ဖိုင်တွင် ကြည့်ရှုနိုင်ပါသည်။", parse_mode="HTML")
+    
+    await context.bot.send_document(
+        chat_id=user_id,
+        document=txt_file,
+        filename="bot_users_list.txt"
+    )
+
+# ==========================================
+# 4. Admin Feature (Broadcast System)
+# ==========================================
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin မှ User အားလုံးထံ Media အစုံနှင့် Text များကို /broadcast လုပ်မယ့် Function"""
+    user_id = update.message.from_user.id
+    
+    # Admin ဟုတ်/မဟုတ် စစ်ဆေးခြင်း
+    if str(user_id) != str(ADMIN_ID):
+        await update.message.reply_text("⛔Access Denied")
+        return
+
+    # Reply လုပ်ထားတဲ့ Message ဟုတ်/မဟုတ် စစ်ဆေးခြင်း
+    reply_to_msg = update.message.reply_to_message
+
+    # Reply လည်းမလုပ်ထားဘူး၊ နောက်မှာလည်း စာသားမပါဘူးဆိုရင် Error ပြမယ်
+    if not reply_to_msg and not context.args:
+        await update.message.reply_text(
+            "⚠️ <b>အသုံးပြုပုံ မှားယွင်းနေပါတယ်။</b>\n\n"
+            "<b>နည်းလမ်း (၁):</b> ပို့လိုသော စာသား၊ ပုံ (သို့) ဗီဒီယိုကို Reply ပြန်ပြီး <code>/broadcast</code> ဟု ရိုက်ပါ။ (မီဒီယာအားလုံးပို့ရန်)\n"
+            "<b>နည်းလမ်း (၂):</b> <code>/broadcast [ပို့လိုသောစာသား]</code> ဟု တိုက်ရိုက်ရိုက်ပါ။",
+            parse_mode="HTML"
+        )
+        return
+
+    # Database ထဲက User အားလုံးကို ဆွဲထုတ်ခြင်း
+    users = await users_collection.find().to_list(length=None)
+    total_users = len(users)
+    success_count = 0
+    
+    # ပို့နေကြောင်း Status အရင်ပြထားမယ် (ကြာသွားရင် စိတ်မပူအောင်လို့ပါ)
+    status_msg = await update.message.reply_text(f"📣 Broadcast စတင်ပို့ဆောင်နေပါသည်...\nစုစုပေါင်း User အရေအတွက်: {total_users} ဦး")
+
+    # User တစ်ယောက်ချင်းစီဆီကို Loop ပတ်ပြီး စာပို့ခြင်း
+    for user in users:
+        try:
+            if reply_to_msg:
+                # Reply လုပ်ပြီး ပို့တာဆိုရင် copy_message ကို သုံးပါမယ် (ပုံ, ဗီဒီယို, File, Text အားလုံးရပါတယ်)
+                await context.bot.copy_message(
+                    chat_id=user["user_id"],
+                    from_chat_id=update.message.chat_id,
+                    message_id=reply_to_msg.message_id
+                )
+            else:
+                # Text သီးသန့် ပို့တာဆိုရင်
+                broadcast_text = " ".join(context.args)
+                await context.bot.send_message(
+                    chat_id=user["user_id"],
+                    text=f"📢 <b>Admin အသိပေးချက်</b>\n\n{broadcast_text}",
+                    parse_mode="HTML"
+                )
+            success_count += 1
+        except Exception as e:
+            # User က Bot ကို Block ထားရင် Error တက်နိုင်လို့ ကျော်သွားအောင် ရေးထားပါတယ်
+            logger.error(f"Broadcast ပို့ရန် အဆင်မပြေပါ User ID {user['user_id']}: {e}")
+
+    # ပို့ပြီးသွားရင် Status ကို Update ပြန်လုပ်ပေးမယ်
+    await status_msg.edit_text(f"✅ Broadcast ပို့ဆောင်မှု ပြီးဆုံးပါပြီ။\nအောင်မြင်စွာပို့နိုင်ခဲ့သူ: {success_count}/{total_users} ဦး")
+
+# ==========================================
+# 5. Premium / Coin Features (See Who Liked You)
+# ==========================================
+
+async def check_likes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/likes နှိပ်လျှင် မိမိကို Like ထားသူများကို စစ်ဆေးမည့် Function"""
+    user_id = update.message.from_user.id
+    current_user = await users_collection.find_one({"user_id": user_id})
+
+    if not current_user:
+        await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပါ။")
+        return
+
+    # ကိုယ့်ကို Like ထားပြီး ကိုယ်က ပြန်မ Like, မ Pass ရသေးတဲ့သူတွေကို ရှာမယ်
+    seen_by_me = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', [])
+    
+    # အရေအတွက်ကိုပဲ အရင်ရေတွက်မယ်
+    likers_count = await users_collection.count_documents({
+        "likes": user_id,
+        "user_id": {"$nin": seen_by_me}
+    })
+
+    coins = current_user.get('coins', 0)
+
+    if likers_count == 0:
+        await update.message.reply_text(f"😔 လောလောဆယ် သင့်ကို လျှို့ဝှက် Like ထားသူ မရှိသေးပါ။\n💰 လက်ကျန် Coin: {coins}")
+        return
+
+    text = (
+        f"🎉 <b>သတင်းကောင်း!</b> သင့်ကို သဘောကျလို့ လျှို့ဝှက် Like ပေးထားသူ <b>{likers_count}</b> ယောက် ရှိပါတယ်။\n"
+        f"💰 သင့် လက်ကျန် Coin: <b>{coins}</b> စေ့\n\n"
+        f"1 Coin သုံးပြီး သူတို့ကို တစ်ခါတည်း ဖွင့်ကြည့်မလား? (Flood မဖြစ်ရန် တစ်ကြိမ်လျှင် အများဆုံး ၅ ယောက်အထိသာ ပြသပေးမည်ဖြစ်သည်)"
+    )
+    keyboard = [[InlineKeyboardButton("👀 1 Coin သုံး၍ အားလုံးကိုကြည့်မည်", callback_data="reveal_like")]]
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """1 Coin သုံး၍ မိမိကို Like ထားသူများကို အများဆုံး ၅ ယောက်အထိ တစ်ခါတည်း ပြပေးမည့် Function"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    current_user = await users_collection.find_one({"user_id": user_id})
+    coins = current_user.get('coins', 0)
+
+    if coins < 1:
+        await query.message.edit_text("❌ Coin မလောက်ပါ။ /daily ကိုနှိပ်ပြီး နေ့စဉ်အခမဲ့ Coin ရယူနိုင်ပါတယ်။")
+        return
+
+    seen_by_me = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', [])
+    
+    # Database ထဲကနေ အများဆုံး ၅ ယောက်ကို ဆွဲထုတ်မယ် (.limit(5) ကို သုံးထားပါတယ်)
+    pending_likers_cursor = users_collection.find({
+        "likes": user_id,
+        "user_id": {"$nin": seen_by_me}
+    }).limit(5)
+    
+    likers = await pending_likers_cursor.to_list(length=None)
+
+    if not likers:
+        await query.message.edit_text("😔 လောလောဆယ် ပြစရာလူ မရှိတော့ပါ။")
+        return
+
+    # Coin ၁ ခု လျှော့မယ်
+    await users_collection.update_one({"user_id": user_id}, {"$inc": {"coins": -1}})
+
+    # အရင်ဆုံး စာလေးတစ်ကြောင်း အသိပေးလိုက်မယ်
+    await query.message.delete()
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=f"✅ <b>Coin 1 ခု သုံးပြီး သင့်ကို Like ထားသူ ({len(likers)}) ယောက်ကို ဖွင့်ပြလိုက်ပါပြီ!</b>\n(လက်ကျန် Coin: {coins - 1} စေ့)",
+        parse_mode="HTML"
+    )
+
+    # ၅ ယောက်လုံးကို တစ်ယောက်ချင်းစီ လှည့်ပြီး ပို့ပေးမယ်
+    for liker in likers:
+        caption = (
+            f"💖 <b>ဒီသူက သင့်ကို Like ပေးထားပါတယ်!</b> 💖\n\n"
+            f"👤 Name: {liker['name']}, {liker.get('age', '-')} နှစ်\n"
+            f"📍 City: {liker.get('city', 'မသိပါ')}\n"
+            f"🚻 Gender: {liker['gender']}\n"
+            f"📝 Bio: {liker.get('bio', 'မရှိပါ')}"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("❌ Pass", callback_data=f"pass_{liker['user_id']}"),
+                InlineKeyboardButton("❤️ Match ပြန်လုပ်မည်", callback_data=f"like_{liker['user_id']}")
+            ]
+        ]
+        
+        await context.bot.send_photo(
+            chat_id=user_id,
+            photo=liker['photo_id'],
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+
+async def daily_reward(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/daily နှိပ်လျှင် နေ့စဉ် အခမဲ့ Coin 1 ခု ပေးမည့် Function"""
+    user_id = update.message.from_user.id
+    current_user = await users_collection.find_one({"user_id": user_id})
+    
+    if not current_user:
+        await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပါ။")
+        return
+
+    now = datetime.utcnow()
+    last_daily = current_user.get("last_daily")
+
+    # 24 နာရီ ပြည့်/မပြည့် စစ်ဆေးခြင်း
+    if last_daily and (now - last_daily).days < 1:
+        next_time = last_daily + timedelta(days=1)
+        hours_left = int((next_time - now).total_seconds() // 3600)
+        await update.message.reply_text(f"⏳ ယနေ့အတွက် Coin ရယူပြီးပါပြီ။ နောက်ထပ် {hours_left} နာရီ နေမှ ပြန်ယူလို့ရပါမယ်။ Coin ဝယ်ယူရန် @moviestoreadmin")
+        return
+
+    # Coin ၁ ခု တိုးပေးပြီး အချိန်မှတ်မယ်
+    await users_collection.update_one(
+        {"user_id": user_id},
+        {"$inc": {"coins": 1}, "$set": {"last_daily": now}}
+    )
+    new_coins = current_user.get('coins', 0) + 1
+    await update.message.reply_text(f"🎁 နေ့စဉ်လက်ဆောင် 1 Coin ရရှိပါသည်! ယခု လက်ကျန်: {new_coins} Coin")
+
+# ==========================================
+# 6. Help Command & Bot Menu Setup
+# ==========================================
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/help နှိပ်လျှင် အသုံးပြုနည်း လမ်းညွှန်ပြသမည့် Function"""
+    help_text = (
+        "🤖 <b>Shwe Phusar အသုံးပြုနည်း လမ်းညွှန်</b>\n\n"
+        "အောက်ပါ Command များကို နှိပ်၍ အလွယ်တကူ အသုံးပြုနိုင်ပါသည် -\n\n"
+        "🔸 /start - Profile အသစ်စတင်ရန်\n"
+        "🔸 /match - ဖူးစာရှင်ကို စတင်ရှာဖွေရန် 💖\n"
+        "🔸 /myprofile - မိမိ၏ Profile ကို ကြည့်ရန် (သို့) ပြင်ရန် 👤\n"
+        "🔸 /likes - မိမိကို Like ပေးထားသူများကို ကြည့်ရန် 👀\n"
+        "🔸 /daily - နေ့စဉ် အခမဲ့ Coin ရယူရန် 🎁\n"
+        "🔸 /help - ဤအသုံးပြုနည်း လမ်းညွှန်ကို ပြန်ဖတ်ရန်\n\n"
+    )
+    await update.message.reply_text(help_text, parse_mode="HTML")
+
+async def post_init(application: Application):
+    """Bot စတင်သည်နှင့် Menu Button ကို အလိုအလျောက် သတ်မှတ်ပေးမည့် Function"""
+    commands = [
+        BotCommand("start", "Bot ကို စတင်ရန် (သို့) Profile ဖွင့်ရန်"),
+        BotCommand("match", "ဖူးစာရှင်ကို စတင်ရှာဖွေရန် 💖"),
+        BotCommand("myprofile", "မိမိ၏ Profile ကိုကြည့်ရန် / ပြင်ရန် 👤"),
+        BotCommand("likes", "မိမိကို Like ထားသူများကို ကြည့်ရန် 👀"),
+        BotCommand("daily", "နေ့စဉ် အခမဲ့ Coin ယူရန် 🎁"),
+        BotCommand("help", "အသုံးပြုနည်း လမ်းညွှန်ဖတ်ရန် ❓"),
+    ]
+    # Telegram Bot ရဲ့ Menu ထဲကို သွားထည့်ပါမယ်
+    await application.bot.set_my_commands(commands)
+
+
+# ==========================================
+# 5. Main Logic
+# ==========================================
+
+def main():
+    keep_alive()
+    if not BOT_TOKEN or not MONGO_URI:
+        logger.error("BOT_TOKEN သို့မဟုတ် MONGO_URI မရှိပါ။")
+        return
+
+    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+    # Handlers (AGE နဲ့ CITY ကို ထည့်သွင်းထားပါတယ်)
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            GENDER: [CallbackQueryHandler(get_gender, pattern="^(Male|Female)$")],
+            LOOKING_FOR: [CallbackQueryHandler(get_looking_for, pattern="^(Male|Female|Both)$")],
+            AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_age)],
+            CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_city)],
+            BIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bio)],
+            PHOTO: [MessageHandler(filters.PHOTO, get_photo)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("match", match_command))
+    application.add_handler(CallbackQueryHandler(handle_action, pattern="^(like_|pass_)"))
+    application.add_handler(CommandHandler("myprofile", my_profile))
+    application.add_handler(CallbackQueryHandler(handle_edit_profile, pattern="^edit_profile$"))
+    application.add_handler(CommandHandler("broadcast", broadcast))
+    application.add_handler(CommandHandler("user", get_users_list))
+    application.add_handler(CommandHandler("likes", check_likes_command))
+    application.add_handler(CallbackQueryHandler(handle_reveal_like, pattern="^reveal_like$"))
+    application.add_handler(CommandHandler("daily", daily_reward))
+    application.add_handler(CommandHandler("help", help_command))
+    
+    logger.info("Bot is starting...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+# ဤအပိုင်းသည် Bot ကို စတင်အလုပ်လုပ်စေသော အဓိက Code ဖြစ်ပါသည်
+if __name__ == "__main__":
+    main()
