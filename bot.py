@@ -141,6 +141,7 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "pass_counts": {},
                 "coins": 5,         
                 "last_daily": None
+                "is_verified": False
             }
         },
         upsert=True # User မရှိရင် အသစ်တည်ဆောက်မယ်၊ ရှိရင် Update လုပ်မယ်လို့ အဓိပ္ပာယ်ရပါတယ်
@@ -161,7 +162,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # ==========================================
 
 async def show_next_profile(current_user, update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
-    # ပထမအဆင့်: Like ထားသူ၊ Pass ထားသူ၊ Match ဖြစ်ပြီးသူ နှင့် "၃ ခါ Pass ထားသူ (hard_passed)" အားလုံးကို ဖယ်ပါမယ်
     seen_users = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
     seen_users.append(current_user['user_id']) 
     
@@ -172,26 +172,21 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
     
     target_user = None
 
-    # Priority 1: ကျား/မ + မြို့ + အသက် အကုန်တူသူကို အရင်ရှာမယ်
     if current_user.get('city') and current_user.get('age'):
         query_1 = base_query.copy()
         query_1['city'] = current_user['city']
         query_1['age'] = current_user['age']
         target_user = await users_collection.find_one(query_1)
         
-    # Priority 2: အသက်မတူရင်တောင် ကျား/မ + မြို့ တူသူကို ဒုတိယရှာမယ်
     if not target_user and current_user.get('city'):
         query_2 = base_query.copy()
         query_2['city'] = current_user['city']
         target_user = await users_collection.find_one(query_2)
 
-    # Priority 3: မြို့ပါမတူရင် ကျား/မ တူသူကိုပဲ တတိယရှာမယ်
     if not target_user:
         target_user = await users_collection.find_one(base_query)
     
-    # Second Chance (လူသစ်ကုန်သွားရင် Pass ထားတဲ့သူကို ပြန်ပြမယ်)
     if not target_user and current_user.get('passed'):
-        # ဤနေရာတွင် hard_passed ပါဝင်သူများကို ဆက်လက်ဖယ်ထုတ်ထားပါမည်
         second_chance_seen = current_user.get('likes', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
         second_chance_seen.append(current_user['user_id'])
         
@@ -205,11 +200,12 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             await users_collection.update_one({"user_id": current_user['user_id']}, {"$set": {"passed": []}})
 
     if target_user:
+        # ✅ ပါ/မပါ စစ်ဆေးပြီး နာမည်ဘေးမှာ ကပ်မယ့်အပိုင်း
+        verified_mark = " ✅" if target_user.get("is_verified") else ""
         caption = (
-            f"👤 Name: {target_user['name']}\n"
-            f"✨ Age: {target_user.get('age', '-')} နှစ်\n"
-            f"📍 City: {target_user.get('city', 'မသိပါ')}\n"
-            f"🚻 Gender: {target_user['gender']}\n"
+            f"👤 အမည်: {target_user['name']}{verified_mark}, {target_user.get('age', '-')} နှစ်\n"
+            f"📍 မြို့: {target_user.get('city', 'မသိပါ')}\n"
+            f"🚻 ကျား/မ: {target_user['gender']}\n"
             f"📝 Bio: {target_user.get('bio', 'မရှိပါ')}"
         )
         keyboard = [
@@ -322,16 +318,18 @@ async def my_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပြီး အရင်ဖန်တီးပါ။")
         return
         
+    # ✅ ပါ/မပါ စစ်ဆေးပြီး နာမည်ဘေးမှာ ကပ်မယ့်အပိုင်း
+    verified_mark = " ✅" if user.get("is_verified") else ""
     caption = (
-        f"🌟 သင့်ရဲ့ လက်ရှိ Profile 🌟\n\n"
-        f"👤 Name: {user['name']} ({user.get('age', '-')} နှစ်)\n"
-        f"📍 City: {user.get('city', 'မသိပါ')}\n"
-        f"🚻 Gender: {user['gender']}\n"
-        f"🔍 Looking: {user['looking_for']}\n"
+        f"🌟 **သင့်ရဲ့ လက်ရှိ Profile** 🌟\n\n"
+        f"👤 အမည်: {user['name']}{verified_mark} ({user.get('age', '-')} နှစ်)\n"
+        f"📍 မြို့: {user.get('city', 'မသိပါ')}\n"
+        f"🚻 ကျား/မ: {user['gender']}\n"
+        f"🔍 ရှာဖွေနေသူ: {user['looking_for']}\n"
         f"📝 Bio: {user.get('bio', 'မရှိပါ')}"
     )
     
-    keyboard = [[InlineKeyboardButton("✏️ Profile အသစ်ပြင်မည်", callback_data="edit_profile")]]
+    keyboard = [[InlineKeyboardButton("✏️ Profile အသစ်ပြန်ပြင်မည်", callback_data="edit_profile")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_photo(photo=user['photo_id'], caption=caption, reply_markup=reply_markup)
@@ -494,7 +492,6 @@ async def check_likes_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """1 Coin သုံး၍ မိမိကို Like ထားသူများကို အများဆုံး ၅ ယောက်အထိ တစ်ခါတည်း ပြပေးမည့် Function"""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
@@ -508,7 +505,6 @@ async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     seen_by_me = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', [])
     
-    # Database ထဲကနေ အများဆုံး ၅ ယောက်ကို ဆွဲထုတ်မယ် (.limit(5) ကို သုံးထားပါတယ်)
     pending_likers_cursor = users_collection.find({
         "likes": user_id,
         "user_id": {"$nin": seen_by_me}
@@ -520,10 +516,8 @@ async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.message.edit_text("😔 လောလောဆယ် ပြစရာလူ မရှိတော့ပါ။")
         return
 
-    # Coin ၁ ခု လျှော့မယ်
     await users_collection.update_one({"user_id": user_id}, {"$inc": {"coins": -1}})
 
-    # အရင်ဆုံး စာလေးတစ်ကြောင်း အသိပေးလိုက်မယ်
     await query.message.delete()
     await context.bot.send_message(
         chat_id=user_id,
@@ -531,13 +525,14 @@ async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode="HTML"
     )
 
-    # ၅ ယောက်လုံးကို တစ်ယောက်ချင်းစီ လှည့်ပြီး ပို့ပေးမယ်
     for liker in likers:
+        # ✅ ပါ/မပါ စစ်ဆေးပြီး နာမည်ဘေးမှာ ကပ်မယ့်အပိုင်း
+        verified_mark = " ✅" if liker.get("is_verified") else ""
         caption = (
             f"💖 <b>ဒီသူက သင့်ကို Like ပေးထားပါတယ်!</b> 💖\n\n"
-            f"👤 Name: {liker['name']}, {liker.get('age', '-')} နှစ်\n"
-            f"📍 City: {liker.get('city', 'မသိပါ')}\n"
-            f"🚻 Gender: {liker['gender']}\n"
+            f"👤 အမည်: {liker['name']}{verified_mark}, {liker.get('age', '-')} နှစ်\n"
+            f"📍 မြို့: {liker.get('city', 'မသိပါ')}\n"
+            f"🚻 ကျား/မ: {liker['gender']}\n"
             f"📝 Bio: {liker.get('bio', 'မရှိပါ')}"
         )
         keyboard = [
@@ -604,14 +599,116 @@ async def post_init(application: Application):
     """Bot စတင်သည်နှင့် Menu Button ကို အလိုအလျောက် သတ်မှတ်ပေးမည့် Function"""
     commands = [
         BotCommand("start", "Bot ကို စတင်ရန် (သို့) Profile ဖွင့်ရန်"),
-        BotCommand("match", "ဖူးစာရှင်ကို စတင်ရှာဖွေရန် 💖"),
+        BotCommand("match", "ကိုက်ညီမည့်သူများကို ရှာဖွေရန် 💖"),
         BotCommand("myprofile", "မိမိ၏ Profile ကိုကြည့်ရန် / ပြင်ရန် 👤"),
         BotCommand("likes", "မိမိကို Like ထားသူများကို ကြည့်ရန် 👀"),
         BotCommand("daily", "နေ့စဉ် အခမဲ့ Coin ယူရန် 🎁"),
+        BotCommand("verify", "အကောင့်အစစ်ဖြစ်ကြောင်း Blue Tick ✅ ယူရန်"), # <--- အသစ်ပါလာတဲ့စာကြောင်း
         BotCommand("help", "အသုံးပြုနည်း လမ်းညွှန်ဖတ်ရန် ❓"),
     ]
-    # Telegram Bot ရဲ့ Menu ထဲကို သွားထည့်ပါမယ်
     await application.bot.set_my_commands(commands)
+# ==========================================
+# 7. Blue Tick Verification System (✅)
+# ==========================================
+VERIFY_PHOTO_STATE = 100 # Verification အတွက် သီးသန့် State
+
+async def verify_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User မှ /verify ဟု ရိုက်လိုက်လျှင် Selfie တောင်းမည့် Function"""
+    user_id = update.message.from_user.id
+    user = await users_collection.find_one({"user_id": user_id})
+    
+    if not user:
+        await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပါ။")
+        return ConversationHandler.END
+        
+    if user.get("is_verified"):
+        await update.message.reply_text("✅ သင့်အကောင့်က Verified ဖြစ်ပြီးသားပါ။ ထပ်လုပ်ရန်မလိုအပ်တော့ပါ။")
+        return ConversationHandler.END
+        
+    await update.message.reply_text(
+        "📸 <b>အကောင့်အစစ်ဖြစ်ကြောင်း အတည်ပြုခြင်း (Blue Tick Verification)</b>\n\n"
+        "ကျေးဇူးပြု၍ သင့်မျက်နှာ သေချာပေါ်လွင်ပြီး <b>လက်နှစ်ချောင်း (✌️) ထောင်ထားသော ဆဲလ်ဖီ (Selfie) ပုံ</b> တစ်ပုံကို ယခုပို့ပေးပါ။\n\n"
+        "<i>(မှတ်ချက် - ဤပုံကို Admin မှလွဲ၍ မည်သူမှ မြင်ရမည်မဟုတ်ပါ။ ကိုယ်ရေးကိုယ်တာ လုံခြုံရေးကို အပြည့်အဝ အာမခံပါသည်။)</i>",
+        parse_mode="HTML"
+    )
+    return VERIFY_PHOTO_STATE
+
+async def receive_verify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User ပို့လိုက်သော Selfie ကို လက်ခံပြီး Admin ထံ ပို့မည့် Function"""
+    photo_file_id = update.message.photo[-1].file_id
+    user_id = update.message.from_user.id
+    user = await users_collection.find_one({"user_id": user_id})
+
+    # Admin ဆီကို Approve/Reject ခလုတ်နဲ့ လှမ်းပို့မယ်
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ လက်ခံမည်", callback_data=f"verify_approve_{user_id}"),
+            InlineKeyboardButton("❌ ပယ်ချမည်", callback_data=f"verify_reject_{user_id}")
+        ]
+    ]
+    
+    caption = (
+        f"🛡️ <b>Verification Request</b> 🛡️\n\n"
+        f"👤 အမည်: {user['name']}\n"
+        f"🚻 ကျား/မ: {user['gender']}\n"
+        f"🆔 User ID: <code>{user_id}</code>"
+    )
+    
+    try:
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=photo_file_id,
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        await update.message.reply_text("⏳ သင့်ပုံကို Admin ထံသို့ စစ်ဆေးရန် ပို့လိုက်ပါပြီ။ အတည်ပြုချက်ရပါက အကြောင်းကြားပေးပါမည်။")
+    except Exception as e:
+        logger.error(f"Error sending verify photo to admin: {e}")
+        await update.message.reply_text("⚠️ တောင်းပန်ပါတယ်။ စနစ်ချို့ယွင်းမှုဖြစ်ပေါ်နေပါတယ်။ Admin ID မှန်မမှန် ပြန်စစ်ပါ။")
+        
+    return ConversationHandler.END
+
+async def verify_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verification ကို Cancel လုပ်လျှင်"""
+    await update.message.reply_text("Verification လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။")
+    return ConversationHandler.END
+
+async def handle_verify_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin မှ Approve သို့မဟုတ် Reject နှိပ်လျှင် အလုပ်လုပ်မည့် Function"""
+    query = update.callback_query
+    
+    # Admin သာ နှိပ်ခွင့်ရှိအောင် တားထားမယ်
+    if str(query.from_user.id) != str(ADMIN_ID):
+        await query.answer("⛔ ဤခလုတ်ကို Admin သာ နှိပ်ခွင့်ရှိပါသည်။", show_alert=True)
+        return
+        
+    await query.answer()
+    data = query.data
+    action, target_id_str = data.split("_")[1], data.split("_")[2]
+    target_id = int(target_id_str)
+    
+    if action == "approve":
+        await users_collection.update_one({"user_id": target_id}, {"$set": {"is_verified": True}})
+        await query.edit_message_caption(caption=f"{query.message.caption}\n\n✅ <b>APPROVED (အတည်ပြုပြီး)</b>", parse_mode="HTML")
+        try:
+            await context.bot.send_message(
+                chat_id=target_id, 
+                text="🎉 <b>ဂုဏ်ယူပါတယ်။</b> သင့်အကောင့်ကို အတည်ပြု (Verify) ပြီးပါပြီ။ သင့်နာမည်ဘေးတွင် အပြာရောင်အမှန်ခြစ် (✅) ပေါ်နေပါတော့မည်။", 
+                parse_mode="HTML"
+            )
+        except: pass
+
+    elif action == "reject":
+        await users_collection.update_one({"user_id": target_id}, {"$set": {"is_verified": False}})
+        await query.edit_message_caption(caption=f"{query.message.caption}\n\n❌ <b>REJECTED (ပယ်ချလိုက်သည်)</b>", parse_mode="HTML")
+        try:
+            await context.bot.send_message(
+                chat_id=target_id, 
+                text="😔 <b>တောင်းပန်ပါတယ်။</b> သင့် Verification ပုံမှာ သတ်မှတ်ချက်များနှင့် မကိုက်ညီသဖြင့် ပယ်ချခံရပါတယ်။ /verify ကို နှိပ်ပြီး မျက်နှာနှင့် လက် ✌️ သေချာပေါ်သောပုံဖြင့် ပြန်လည်ကြိုးစားနိုင်ပါတယ်။", 
+                parse_mode="HTML"
+            )
+        except: pass
 
 
 # ==========================================
@@ -621,14 +718,16 @@ async def post_init(application: Application):
 def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    keep_alive()
+
+    keep_alive() 
+
     if not BOT_TOKEN or not MONGO_URI:
         logger.error("BOT_TOKEN သို့မဟုတ် MONGO_URI မရှိပါ။")
         return
 
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # Handlers (AGE နဲ့ CITY ကို ထည့်သွင်းထားပါတယ်)
+    # Registration Flow
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -642,19 +741,41 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-
     application.add_handler(conv_handler)
+    
+    # -------------------------------------------------------------
+    # Blue Tick Verification Handler အသစ် ထည့်သွင်းခြင်း
+    # -------------------------------------------------------------
+    verify_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("verify", verify_start)],
+        states={
+            VERIFY_PHOTO_STATE: [MessageHandler(filters.PHOTO, receive_verify_photo)],
+        },
+        fallbacks=[CommandHandler("cancel", verify_cancel)],
+    )
+    application.add_handler(verify_conv_handler)
+    application.add_handler(CallbackQueryHandler(handle_verify_action, pattern="^verify_(approve|reject)_"))
+
+    # Match Command နဲ့ Like/Pass Action 
     application.add_handler(CommandHandler("match", match_command))
     application.add_handler(CallbackQueryHandler(handle_action, pattern="^(like_|pass_)"))
+    
+    # My Profile Commands 
     application.add_handler(CommandHandler("myprofile", my_profile))
     application.add_handler(CallbackQueryHandler(handle_edit_profile, pattern="^edit_profile$"))
+    
+    # Admin Features
     application.add_handler(CommandHandler("broadcast", broadcast))
     application.add_handler(CommandHandler("user", get_users_list))
+    
+    # Coins and Gamification
     application.add_handler(CommandHandler("likes", check_likes_command))
     application.add_handler(CallbackQueryHandler(handle_reveal_like, pattern="^reveal_like$"))
     application.add_handler(CommandHandler("daily", daily_reward))
-    application.add_handler(CommandHandler("help", help_command))
     
+    # Help Menu
+    application.add_handler(CommandHandler("help", help_command))
+
     logger.info("Bot is starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
