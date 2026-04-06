@@ -23,6 +23,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 ADMIN_ID = os.getenv("ADMIN_ID")
+LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -36,6 +37,14 @@ users_collection = db.users
 
 # Conversation States (AGE နဲ့ CITY ထပ်တိုးထားပါတယ်)
 NAME, GENDER, LOOKING_FOR, AGE, CITY, BIO, PHOTO = range(7)
+
+async def send_log(context: ContextTypes.DEFAULT_TYPE, message: str):
+    """Admin Log Channel သို့ သတင်းလှမ်းပို့မည့် Function"""
+    if LOG_CHANNEL_ID:
+        try:
+            await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=message, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Log Channel သို့ ပို့ရန် အဆင်မပြေပါ: {e}")
 
 # ==========================================
 # 1. Registration Flow
@@ -116,12 +125,10 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     photo_file_id = update.message.photo[-1].file_id
     user_id = update.message.from_user.id
     
-    # အသစ်ထည့်တာ (insert_one) အစား Update လုပ်တာ (update_one) ကို ပြောင်းသုံးပါမယ်
     await users_collection.update_one(
         {"user_id": user_id},
         {
             "$set": {
-                # $set ထဲက အချက်အလက်တွေက Profile ပြင်တိုင်း အမြဲတမ်း Update ဖြစ်ပါမယ်
                 "username": update.message.from_user.username,
                 "name": context.user_data['name'],
                 "gender": context.user_data['gender'],
@@ -130,24 +137,36 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "city": context.user_data['city'],
                 "bio": context.user_data['bio'],
                 "photo_id": photo_file_id,
-                "is_editing": False  # Edit လုပ်တာ ပြီးဆုံးသွားပြီဖြစ်ကြောင်း မှတ်သားမယ်
+                "is_editing": False 
             },
             "$setOnInsert": {
-                # $setOnInsert ကတော့ ပထမဆုံးအကြိမ် Bot ကို စသုံးတဲ့သူတွေအတွက် "တစ်ကြိမ်" သာ အလုပ်လုပ်ပါမယ်
                 "likes": [],     
                 "passed": [],    
                 "matches": [],
-                "hard_passed": [],   
+                "hard_passed": [],
                 "pass_counts": {},
-                "coins": 5,         
+                "coins": 5,          
                 "last_daily": None,
-                "is_verified": False
+                "is_verified": False 
             }
         },
-        upsert=True # User မရှိရင် အသစ်တည်ဆောက်မယ်၊ ရှိရင် Update လုပ်မယ်လို့ အဓိပ္ပာယ်ရပါတယ်
+        upsert=True
     )
     
-    await update.message.reply_text("🎉 Profile အောင်မြင်စွာ တည်ဆောက်ပြီးပါပြီ!\nဖူးစာရှင် စတင်ရှာဖွေရန် : /match ကိုနှိပ်ပါ။")
+    await update.message.reply_text("🎉 Profile အောင်မြင်စွာ တည်ဆောက်ပြီးပါပြီ!\nMatch စတင်ရှာဖွေရန်: /match ကိုနှိပ်ပါ။")
+    
+    # -------------------------------------------------------------
+    # Log Channel သို့ လူသစ်ရောက်ကြောင်း ပို့မည့်အပိုင်း
+    # -------------------------------------------------------------
+    log_text = (
+        f"🆕 <b>User အသစ် ဝင်ရောက်လာပါပြီ!</b>\n"
+        f"👤 အမည်: {context.user_data['name']}\n"
+        f"🚻 ကျား/မ: {context.user_data['gender']}\n"
+        f"📍 မြို့: {context.user_data['city']}\n"
+        f"🆔 User ID: <code>{user_id}</code>"
+    )
+    await send_log(context, log_text)
+    
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -256,18 +275,15 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_user_id = query.from_user.id
     current_user = await users_collection.find_one({"user_id": current_user_id})
 
-    # (၁) Super Like အတွက် Coin စစ်ဆေးခြင်း
     if action == "superlike":
         if current_user.get("coins", 0) < 3:
             await query.answer("❌ Super Like ပေးရန် Coin ၃ ခု လိုအပ်ပါသည်။ /daily နှိပ်၍ အခမဲ့ရယူပါ။", show_alert=True)
             return
-        # Coin ၃ ခု ဖြတ်မည်
         await users_collection.update_one({"user_id": current_user_id}, {"$inc": {"coins": -3}})
         await query.answer("🌟 Super Like အောင်မြင်စွာ ပို့လိုက်ပါပြီ!", show_alert=True)
     else:
         await query.answer()
 
-    # (၂) Pass ခလုတ် နှိပ်လျှင်
     if action == "pass":
         target_str_id = str(target_user_id)
         await users_collection.update_one(
@@ -283,27 +299,34 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if pass_count >= 3:
             await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"hard_passed": target_user_id}})
 
-    # (၃) Like (သို့) Super Like နှိပ်လျှင်
     elif action in ["like", "superlike"]:
         await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"likes": target_user_id}})
         
         target_user = await users_collection.find_one({"user_id": target_user_id})
         is_match = target_user and current_user_id in target_user.get("likes", [])
 
-        # Match ဖြစ်သွားလျှင် (နှစ်ဦးသဘောတူ)
         if is_match:
             await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"matches": target_user_id}})
             await users_collection.update_one({"user_id": target_user_id}, {"$addToSet": {"matches": current_user_id}})
             
             target_username = f"@{target_user['username']}" if target_user.get('username') else f"<a href='tg://user?id={target_user['user_id']}'>{target_user['name']}</a>"
-            await context.bot.send_message(chat_id=current_user_id, text=f"🎉 <b>Match ဖြစ်သွားပါပြီ!</b>\nသင်နဲ့ {target_user['name']} တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ။\nစကားသွားပြောရန်: {target_username}", parse_mode="HTML")
+            await context.bot.send_message(chat_id=current_user_id, text=f"🎉 <b>Match ဖြစ်သွားပါပြီ!</b>\nသင်နဲ့ {target_user['name']} တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {target_username}", parse_mode="HTML")
             
             current_username = f"@{current_user['username']}" if current_user.get('username') else f"<a href='tg://user?id={current_user['user_id']}'>{current_user['name']}</a>"
             try:
-                await context.bot.send_message(chat_id=target_user_id, text=f"🎉 <b>Match အသစ် ရပါပြီ!</b>\n{current_user['name']} နဲ့ သင်တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ။\nစကားသွားပြောရန်: {current_username}", parse_mode="HTML")
+                await context.bot.send_message(chat_id=target_user_id, text=f"🎉 <b>Match အသစ် ရပါပြီ!</b>\n{current_user['name']} နဲ့ သင်တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {current_username}", parse_mode="HTML")
             except: pass
 
-        # Match မဖြစ်သေးဘဲ Super Like ပေးလိုက်လျှင် (တစ်ဖက်လူဆီ ချက်ချင်း Notification သွားပို့မည်)
+            # -------------------------------------------------------------
+            # Log Channel သို့ Match ဖြစ်ကြောင်း ပို့မည့်အပိုင်း
+            # -------------------------------------------------------------
+            log_text = (
+                f"💞 <b>Match အသစ် ဖြစ်သွားပါပြီ!</b>\n"
+                f"1️⃣ {current_user['name']} (<code>{current_user_id}</code>)\n"
+                f"2️⃣ {target_user['name']} (<code>{target_user_id}</code>)"
+            )
+            await send_log(context, log_text)
+
         elif action == "superlike":
             status = "✅ အတည်ပြုပြီး (Verified User)" if current_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
             caption = (
@@ -331,7 +354,6 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Failed to send superlike notification to {target_user_id}: {e}")
 
-    # (၄) နောက်ထပ် Profile ကို ဆက်ပြမည်
     current_user_updated = await users_collection.find_one({"user_id": current_user_id})
     await show_next_profile(current_user_updated, update, context, is_callback=True)
 
