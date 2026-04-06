@@ -214,6 +214,9 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             [
                 InlineKeyboardButton("❌ Pass", callback_data=f"pass_{target_user['user_id']}"),
                 InlineKeyboardButton("❤️ Like", callback_data=f"like_{target_user['user_id']}")
+            ],
+            [
+                InlineKeyboardButton("🌟 Super Like (3 Coins)", callback_data=f"superlike_{target_user['user_id']}")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -247,17 +250,26 @@ async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    
-    data = query.data 
-    action, target_user_id_str = data.split("_")
+    data = query.data
+    action, target_user_id_str = data.split("_")[0], data.split("_")[1]
     target_user_id = int(target_user_id_str)
     current_user_id = query.from_user.id
-    
+    current_user = await users_collection.find_one({"user_id": current_user_id})
+
+    # (၁) Super Like အတွက် Coin စစ်ဆေးခြင်း
+    if action == "superlike":
+        if current_user.get("coins", 0) < 3:
+            await query.answer("❌ Super Like ပေးရန် Coin ၃ ခု လိုအပ်ပါသည်။ /daily နှိပ်၍ အခမဲ့ရယူပါ။", show_alert=True)
+            return
+        # Coin ၃ ခု ဖြတ်မည်
+        await users_collection.update_one({"user_id": current_user_id}, {"$inc": {"coins": -3}})
+        await query.answer("🌟 Super Like အောင်မြင်စွာ ပို့လိုက်ပါပြီ!", show_alert=True)
+    else:
+        await query.answer()
+
+    # (၂) Pass ခလုတ် နှိပ်လျှင်
     if action == "pass":
         target_str_id = str(target_user_id)
-        
-        # passed list ထဲ ထည့်မယ်၊ ပြီးတော့ pass_counts ကို ၁ တိုးမယ် ($inc ကို သုံးပါသည်)
         await users_collection.update_one(
             {"user_id": current_user_id},
             {
@@ -265,48 +277,63 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "$inc": {f"pass_counts.{target_str_id}": 1}
             }
         )
-        
-        # ၃ ခါ ပြည့်/မပြည့် စစ်ဆေးမယ်
         updated_user = await users_collection.find_one({"user_id": current_user_id})
         pass_count = updated_user.get("pass_counts", {}).get(target_str_id, 0)
         
         if pass_count >= 3:
-            # ၃ ခါပြည့်သွားပါက hard_passed (လုံးဝမပြတော့မည့်စာရင်း) ထဲသို့ ထည့်မည်
-            await users_collection.update_one(
-                {"user_id": current_user_id},
-                {"$addToSet": {"hard_passed": target_user_id}}
-            )
+            await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"hard_passed": target_user_id}})
 
-    elif action == "like":
+    # (၃) Like (သို့) Super Like နှိပ်လျှင်
+    elif action in ["like", "superlike"]:
         await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"likes": target_user_id}})
         
         target_user = await users_collection.find_one({"user_id": target_user_id})
-        if target_user and current_user_id in target_user.get("likes", []):
+        is_match = target_user and current_user_id in target_user.get("likes", [])
+
+        # Match ဖြစ်သွားလျှင် (နှစ်ဦးသဘောတူ)
+        if is_match:
             await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"matches": target_user_id}})
             await users_collection.update_one({"user_id": target_user_id}, {"$addToSet": {"matches": current_user_id}})
             
-            # HTML format နဲ့ Error ရှင်းထားတဲ့အပိုင်း
-            target_username = f"@{target_user['username']}" if target_user.get('username') else target_user['name']
-            await context.bot.send_message(
-                chat_id=current_user_id,
-                text=f"🎉 <b>ဖူးစာရှင်ရှာတွေ့သွားပါပြီ!</b>\nသင်နဲ့ {target_user['name']} တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {target_username}",
-                parse_mode="HTML"
-            )
+            target_username = f"@{target_user['username']}" if target_user.get('username') else f"<a href='tg://user?id={target_user['user_id']}'>{target_user['name']}</a>"
+            await context.bot.send_message(chat_id=current_user_id, text=f"🎉 <b>Match ဖြစ်သွားပါပြီ!</b>\nသင်နဲ့ {target_user['name']} တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ။\nစကားသွားပြောရန်: {target_username}", parse_mode="HTML")
             
-            current_user = await users_collection.find_one({"user_id": current_user_id})
-            current_username = f"@{current_user['username']}" if current_user.get('username') else current_user['name']
+            current_username = f"@{current_user['username']}" if current_user.get('username') else f"<a href='tg://user?id={current_user['user_id']}'>{current_user['name']}</a>"
             try:
-                await context.bot.send_message(
+                await context.bot.send_message(chat_id=target_user_id, text=f"🎉 <b>Match အသစ် ရပါပြီ!</b>\n{current_user['name']} နဲ့ သင်တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ။\nစကားသွားပြောရန်: {current_username}", parse_mode="HTML")
+            except: pass
+
+        # Match မဖြစ်သေးဘဲ Super Like ပေးလိုက်လျှင် (တစ်ဖက်လူဆီ ချက်ချင်း Notification သွားပို့မည်)
+        elif action == "superlike":
+            status = "✅ အတည်ပြုပြီး (Verified User)" if current_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+            caption = (
+                f"🌟 <b>WOW! သင့်ကို တစ်စုံတစ်ယောက်က Super Like 🌟 ပေးလိုက်ပါတယ်။</b>\n\n"
+                f"👤 အမည်: {current_user['name']}, {current_user.get('age', '-')} နှစ်\n"
+                f"📍 မြို့: {current_user.get('city', 'မသိပါ')}\n"
+                f"🚻 ကျား/မ: {current_user['gender']}\n"
+                f"🛡️ အကောင့်အခြေအနေ: {status}\n"
+                f"📝 Bio: {current_user.get('bio', 'မရှိပါ')}"
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton("❌ Pass", callback_data=f"pass_{current_user_id}"),
+                    InlineKeyboardButton("❤️ Match ပြန်လုပ်မည်", callback_data=f"like_{current_user_id}")
+                ]
+            ]
+            try:
+                await context.bot.send_photo(
                     chat_id=target_user_id,
-                    text=f"🎉 <b>ဖူးစာရှင် အသစ် ရပါပြီ!</b>\n{current_user['name']} နဲ့ သင်တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {current_username}",
+                    photo=current_user['photo_id'],
+                    caption=caption,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="HTML"
                 )
             except Exception as e:
-                logger.error(f"Failed to send match notification to {target_user_id}: {e}")
+                logger.error(f"Failed to send superlike notification to {target_user_id}: {e}")
 
+    # (၄) နောက်ထပ် Profile ကို ဆက်ပြမည်
     current_user_updated = await users_collection.find_one({"user_id": current_user_id})
     await show_next_profile(current_user_updated, update, context, is_callback=True)
-
 
 # ==========================================
 # 3. My Profile System
@@ -545,6 +572,9 @@ async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [
                 InlineKeyboardButton("❌ Pass", callback_data=f"pass_{liker['user_id']}"),
                 InlineKeyboardButton("❤️ Match ပြန်လုပ်မည်", callback_data=f"like_{liker['user_id']}")
+            ],
+            [
+                InlineKeyboardButton("🌟 Super Like (3 Coins)", callback_data=f"superlike_{liker['user_id']}")
             ]
         ]
         
@@ -764,7 +794,7 @@ def main():
 
     # Match Command နဲ့ Like/Pass Action 
     application.add_handler(CommandHandler("match", match_command))
-    application.add_handler(CallbackQueryHandler(handle_action, pattern="^(like_|pass_)"))
+    application.add_handler(CallbackQueryHandler(handle_action, pattern="^(like_|pass_|superlike_)"))
     
     # My Profile Commands 
     application.add_handler(CommandHandler("myprofile", my_profile))
