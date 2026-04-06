@@ -708,6 +708,11 @@ async def receive_verify_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.message.from_user.id
     user = await users_collection.find_one({"user_id": user_id})
 
+    # -------------------------------------------------------------
+    # Username ကို ဆွဲထုတ်မည့်အပိုင်း (အသစ်ထပ်တိုးထားသည်)
+    # -------------------------------------------------------------
+    username_str = f"@{update.message.from_user.username}" if update.message.from_user.username else "မရှိပါ"
+
     # Admin ဆီကို Approve/Reject ခလုတ်နဲ့ လှမ်းပို့မယ်
     keyboard = [
         [
@@ -716,9 +721,13 @@ async def receive_verify_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         ]
     ]
     
+    # -------------------------------------------------------------
+    # Caption ထဲမှာ Username ပါ ထည့်ရေးပါမယ် (အသစ်ပြင်ထားသည်)
+    # -------------------------------------------------------------
     caption = (
         f"🛡️ <b>Verification Request</b> 🛡️\n\n"
         f"👤 အမည်: {user['name']}\n"
+        f"💬 Username: {username_str}\n"
         f"🚻 ကျား/မ: {user['gender']}\n"
         f"🆔 User ID: <code>{user_id}</code>"
     )
