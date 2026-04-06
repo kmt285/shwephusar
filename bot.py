@@ -696,8 +696,8 @@ async def verify_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await update.message.reply_text(
         "📸 <b>အကောင့်အစစ်ဖြစ်ကြောင်း အတည်ပြုခြင်း (Blue Tick Verification)</b>\n\n"
-        "ကျေးဇူးပြု၍ သင့်မျက်နှာ သေချာပေါ်လွင်ပြီး <b>လက်နှစ်ချောင်း (✌️) ထောင်ထားသော ဆဲလ်ဖီ (Selfie) ပုံ</b> တစ်ပုံကို ယခုပို့ပေးပါ။\n\n"
-        "<i>(မှတ်ချက် - ဤပုံကို Admin မှလွဲ၍ မည်သူမှ မြင်ရမည်မဟုတ်ပါ။ ကိုယ်ရေးကိုယ်တာ လုံခြုံရေးကို အပြည့်အဝ အာမခံပါသည်။)</i>",
+        "ကျေးဇူးပြု၍ သင့်မျက်နှာ သေချာပေါ်လွင်ပြီး <b>လက်နှစ်ချောင်း (✌️) ထောင်ထားသော ဆဲလ်ဖီ (Selfie) ပုံ</b> တစ်ပုံကို ပို့ပေးပါ။\n\n"
+        "<i>(Note: This image will not be visible to anyone except the admin. Privacy is fully guaranteed.)</i>",
         parse_mode="HTML"
     )
     return VERIFY_PHOTO_STATE
