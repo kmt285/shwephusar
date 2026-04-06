@@ -137,7 +137,9 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "likes": [],     
                 "passed": [],    
                 "matches": [],
-                "coins": 5,          # ပထမဆုံးအကြိမ်သာ ၅ ခုပေးမယ်
+                "hard_passed": [],   
+                "pass_counts": {},
+                "coins": 5,         
                 "last_daily": None
             }
         },
@@ -159,10 +161,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # ==========================================
 
 async def show_next_profile(current_user, update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
-    seen_users = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', [])
+    # ပထမအဆင့်: Like ထားသူ၊ Pass ထားသူ၊ Match ဖြစ်ပြီးသူ နှင့် "၃ ခါ Pass ထားသူ (hard_passed)" အားလုံးကို ဖယ်ပါမယ်
+    seen_users = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
     seen_users.append(current_user['user_id']) 
     
-    # အခြေခံစစ်ထုတ်မှု (Gender ကိုက်ညီမှု)
     base_query = {"user_id": {"$nin": seen_users}}
     if current_user['looking_for'] != "Both":
         base_query['gender'] = current_user['looking_for']
@@ -189,7 +191,8 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
     
     # Second Chance (လူသစ်ကုန်သွားရင် Pass ထားတဲ့သူကို ပြန်ပြမယ်)
     if not target_user and current_user.get('passed'):
-        second_chance_seen = current_user.get('likes', []) + current_user.get('matches', [])
+        # ဤနေရာတွင် hard_passed ပါဝင်သူများကို ဆက်လက်ဖယ်ထုတ်ထားပါမည်
+        second_chance_seen = current_user.get('likes', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
         second_chance_seen.append(current_user['user_id'])
         
         query_second = {"user_id": {"$nin": second_chance_seen}}
@@ -254,7 +257,28 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_user_id = query.from_user.id
     
     if action == "pass":
-        await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"passed": target_user_id}})
+        target_str_id = str(target_user_id)
+        
+        # passed list ထဲ ထည့်မယ်၊ ပြီးတော့ pass_counts ကို ၁ တိုးမယ် ($inc ကို သုံးပါသည်)
+        await users_collection.update_one(
+            {"user_id": current_user_id},
+            {
+                "$addToSet": {"passed": target_user_id},
+                "$inc": {f"pass_counts.{target_str_id}": 1}
+            }
+        )
+        
+        # ၃ ခါ ပြည့်/မပြည့် စစ်ဆေးမယ်
+        updated_user = await users_collection.find_one({"user_id": current_user_id})
+        pass_count = updated_user.get("pass_counts", {}).get(target_str_id, 0)
+        
+        if pass_count >= 3:
+            # ၃ ခါပြည့်သွားပါက hard_passed (လုံးဝမပြတော့မည့်စာရင်း) ထဲသို့ ထည့်မည်
+            await users_collection.update_one(
+                {"user_id": current_user_id},
+                {"$addToSet": {"hard_passed": target_user_id}}
+            )
+
     elif action == "like":
         await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"likes": target_user_id}})
         
