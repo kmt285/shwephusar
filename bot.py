@@ -38,11 +38,16 @@ users_collection = db.users
 # Conversation States (AGE နဲ့ CITY ထပ်တိုးထားပါတယ်)
 NAME, GENDER, LOOKING_FOR, AGE, CITY, BIO, PHOTO = range(7)
 
-async def send_log(context: ContextTypes.DEFAULT_TYPE, message: str):
-    """Admin Log Channel သို့ သတင်းလှမ်းပို့မည့် Function"""
+async def send_log(context: ContextTypes.DEFAULT_TYPE, message: str, photo_id: str = None):
+    """Admin Log Channel သို့ ဓာတ်ပုံနှင့်တကွ သတင်းလှမ်းပို့မည့် Function"""
     if LOG_CHANNEL_ID:
         try:
-            await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=message, parse_mode="HTML")
+            # ဓာတ်ပုံ ID ပါလာရင် ဓာတ်ပုံပါ တွဲပို့မယ်
+            if photo_id:
+                await context.bot.send_photo(chat_id=LOG_CHANNEL_ID, photo=photo_id, caption=message, parse_mode="HTML")
+            # ဓာတ်ပုံ မပါလာရင် စာသားပဲ ပို့မယ်
+            else:
+                await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=message, parse_mode="HTML")
         except Exception as e:
             logger.error(f"Log Channel သို့ ပို့ရန် အဆင်မပြေပါ: {e}")
 
@@ -158,14 +163,17 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # -------------------------------------------------------------
     # Log Channel သို့ လူသစ်ရောက်ကြောင်း ပို့မည့်အပိုင်း
     # -------------------------------------------------------------
+    username_str = f"@{update.message.from_user.username}" if update.message.from_user.username else "မရှိပါ"
+    
     log_text = (
         f"🆕 <b>User အသစ် ဝင်ရောက်လာပါပြီ!</b>\n"
         f"👤 အမည်: {context.user_data['name']}\n"
+        f"💬 Username: {username_str}\n"
         f"🚻 ကျား/မ: {context.user_data['gender']}\n"
         f"📍 မြို့: {context.user_data['city']}\n"
         f"🆔 User ID: <code>{user_id}</code>"
     )
-    await send_log(context, log_text)
+    await send_log(context, log_text, photo_id=photo_file_id)
     
     context.user_data.clear()
     return ConversationHandler.END
@@ -319,13 +327,16 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # -------------------------------------------------------------
             # Log Channel သို့ Match ဖြစ်ကြောင်း ပို့မည့်အပိုင်း
-            # -------------------------------------------------------------
+            curr_uname = f"@{current_user['username']}" if current_user.get('username') else "မရှိပါ"
+            tgt_uname = f"@{target_user['username']}" if target_user.get('username') else "မရှိပါ"
+            
             log_text = (
                 f"💞 <b>Match အသစ် ဖြစ်သွားပါပြီ!</b>\n"
-                f"1️⃣ {current_user['name']} (<code>{current_user_id}</code>)\n"
-                f"2️⃣ {target_user['name']} (<code>{target_user_id}</code>)"
+                f"1️⃣ {current_user['name']} ({curr_uname}) - <code>{current_user_id}</code>\n"
+                f"2️⃣ {target_user['name']} ({tgt_uname}) - <code>{target_user_id}</code>"
             )
-            await send_log(context, log_text)
+            # Match ဖြစ်သူ နှစ်ယောက်ထဲမှ လက်ရှိ Action ယူသူ၏ ပုံကို ပူးတွဲပို့ပါမည်
+            await send_log(context, log_text, photo_id=current_user['photo_id'])
 
         elif action == "superlike":
             status = "✅ အတည်ပြုပြီး (Verified User)" if current_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
