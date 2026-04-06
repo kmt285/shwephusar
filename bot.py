@@ -140,10 +140,10 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "hard_passed": [],   
                 "pass_counts": {},
                 "coins": 5,         
-                "last_daily": None
+                "last_daily": None,
                 "is_verified": False
-                }
-            },
+            }
+        },
         upsert=True # User မရှိရင် အသစ်တည်ဆောက်မယ်၊ ရှိရင် Update လုပ်မယ်လို့ အဓိပ္ပာယ်ရပါတယ်
     )
     
