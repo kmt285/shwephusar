@@ -200,12 +200,14 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             await users_collection.update_one({"user_id": current_user['user_id']}, {"$set": {"passed": []}})
 
     if target_user:
-        # ✅ ပါ/မပါ စစ်ဆေးပြီး နာမည်ဘေးမှာ ကပ်မယ့်အပိုင်း
-        verified_mark = " ✅" if target_user.get("is_verified") else ""
+        # သီးသန့် အကောင့်အခြေအနေ (Status) ဖန်တီးခြင်း
+        status = "✅ အတည်ပြုပြီး (Verified User)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+        
         caption = (
-            f"👤 အမည်: {target_user['name']}{verified_mark}, {target_user.get('age', '-')} နှစ်\n"
+            f"👤 အမည်: {target_user['name']}, {target_user.get('age', '-')} နှစ်\n"
             f"📍 မြို့: {target_user.get('city', 'မသိပါ')}\n"
             f"🚻 ကျား/မ: {target_user['gender']}\n"
+            f"🛡️ အကောင့်အခြေအနေ: {status}\n"
             f"📝 Bio: {target_user.get('bio', 'မရှိပါ')}"
         )
         keyboard = [
@@ -318,13 +320,15 @@ async def my_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပြီး အရင်ဖန်တီးပါ။")
         return
         
-    # ✅ ပါ/မပါ စစ်ဆေးပြီး နာမည်ဘေးမှာ ကပ်မယ့်အပိုင်း
-    verified_mark = " ✅" if user.get("is_verified") else ""
+    # သီးသန့် အကောင့်အခြေအနေ (Status) ဖန်တီးခြင်း
+    status = "✅ အတည်ပြုပြီး (Verified User)" if user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+    
     caption = (
         f"🌟 **သင့်ရဲ့ လက်ရှိ Profile** 🌟\n\n"
-        f"👤 အမည်: {user['name']}{verified_mark} ({user.get('age', '-')} နှစ်)\n"
+        f"👤 အမည်: {user['name']} ({user.get('age', '-')} နှစ်)\n"
         f"📍 မြို့: {user.get('city', 'မသိပါ')}\n"
         f"🚻 ကျား/မ: {user['gender']}\n"
+        f"🛡️ အကောင့်အခြေအနေ: {status}\n"
         f"🔍 ရှာဖွေနေသူ: {user['looking_for']}\n"
         f"📝 Bio: {user.get('bio', 'မရှိပါ')}"
     )
@@ -526,13 +530,15 @@ async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
     for liker in likers:
-        # ✅ ပါ/မပါ စစ်ဆေးပြီး နာမည်ဘေးမှာ ကပ်မယ့်အပိုင်း
-        verified_mark = " ✅" if liker.get("is_verified") else ""
+        # သီးသန့် အကောင့်အခြေအနေ (Status) ဖန်တီးခြင်း
+        status = "✅ အတည်ပြုပြီး (Verified User)" if liker.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+        
         caption = (
             f"💖 <b>ဒီသူက သင့်ကို Like ပေးထားပါတယ်!</b> 💖\n\n"
-            f"👤 အမည်: {liker['name']}{verified_mark}, {liker.get('age', '-')} နှစ်\n"
+            f"👤 အမည်: {liker['name']}, {liker.get('age', '-')} နှစ်\n"
             f"📍 မြို့: {liker.get('city', 'မသိပါ')}\n"
             f"🚻 ကျား/မ: {liker['gender']}\n"
+            f"🛡️ အကောင့်အခြေအနေ: {status}\n"
             f"📝 Bio: {liker.get('bio', 'မရှိပါ')}"
         )
         keyboard = [
