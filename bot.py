@@ -1,6 +1,7 @@
 import os
 import logging
 import io
+import asyncio
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
@@ -594,6 +595,8 @@ async def post_init(application: Application):
 # ==========================================
 
 def main():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     keep_alive()
     if not BOT_TOKEN or not MONGO_URI:
         logger.error("BOT_TOKEN သို့မဟုတ် MONGO_URI မရှိပါ။")
