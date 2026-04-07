@@ -532,43 +532,34 @@ async def get_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔Access Denied!")
         return
 
-    # Database ထဲက User အားလုံးကို ဆွဲထုတ်ခြင်း
-    users = await users_collection.find().to_list(length=None)
-    total_users = len(users)
+    # Database ထဲက User အရေအတွက်ကိုသာ အရင်ရေတွက်ခြင်း
+    total_users = await users_collection.count_documents({})
 
     if total_users == 0:
         await update.message.reply_text("လောလောဆယ် Bot အသုံးပြုသူ မရှိသေးပါ။")
         return
 
-    # txt ဖိုင်ထဲတွင် ရေးမည့် စာသားများကို စီစဉ်ခြင်း
-    file_content = f"=== LeoMatch Bot Users List ===\n"
-    file_content += f"Total Users: {total_users}\n"
-    file_content += f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-    file_content += "=" * 40 + "\n\n"
+    # Memory မစားစေရန် BytesIO ဖိုင်ထဲသို့ တိုက်ရိုက်ရေးထည့်ခြင်း
+    txt_file = io.BytesIO()
+    header = f"=== LeoMatch Bot Users List ===\nTotal Users: {total_users}\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "=" * 40 + "\n\n"
+    txt_file.write(header.encode('utf-8'))
 
-    for idx, user in enumerate(users, 1):
+    # async for ကိုသုံး၍ Database မှ Data များကို တစ်ကြောင်းချင်းစီသာ ဆွဲထုတ်ဖတ်ခြင်း
+    idx = 1
+    async for user in users_collection.find():
         name = user.get("name", "Unknown")
-        # Username မရှိရင် 'မရှိပါ' လို့ ပြမယ်
         username = f"@{user.get('username')}" if user.get("username") else "မရှိပါ"
         uid = user.get("user_id", "Unknown")
         gender = user.get("gender", "-")
         coins = user.get("coins", 0)
         
-        # User တစ်ယောက်ချင်းစီရဲ့ အချက်အလက်ကို စာကြောင်းတစ်ကြောင်းစီ ထည့်မယ်
-        file_content += f"{idx}. Name: {name} | Username: {username} | Gender: {gender} | Coins: {coins} | UserID: {uid}\n"
+        line = f"{idx}. Name: {name} | Username: {username} | Gender: {gender} | Coins: {coins} | UserID: {uid}\n"
+        txt_file.write(line.encode('utf-8'))
+        idx += 1
 
-    # စာသားများကို Memory ထဲတွင် txt ဖိုင်အဖြစ် ဖန်တီးခြင်း
-    txt_file = io.BytesIO(file_content.encode('utf-8'))
+    # ဖိုင်ကို အစကနေ ပြန်ဖတ်နိုင်ရန် ညွှန်းတံကို အစသို့ ပြန်ရွှေ့ခြင်း
+    txt_file.seek(0)
     txt_file.name = "bot_users_list.txt"
-
-    # Admin ထံသို့ စာနှင့်တကွ ဖိုင်ကို ပို့ဆောင်ခြင်း
-    await update.message.reply_text(f"📊 စုစုပေါင်း Bot အသုံးပြုသူ: <b>{total_users}</b> ဦး\nအသေးစိတ်ကို အောက်ပါ txt ဖိုင်တွင် ကြည့်ရှုနိုင်ပါသည်။", parse_mode="HTML")
-    
-    await context.bot.send_document(
-        chat_id=user_id,
-        document=txt_file,
-        filename="bot_users_list.txt"
-    )
 
 # ==========================================
 # 4. Admin Feature (Broadcast System)
@@ -596,13 +587,15 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Database ထဲက User အားလုံးကို ဆွဲထုတ်ခြင်း
-    users = await users_collection.find().to_list(length=None)
-    total_users = len(users)
+    # Database ထဲက အမှန်တကယ် Active ဖြစ်နေတဲ့ User အရေအတွက်ကိုသာ ရေတွက်ခြင်း
+    total_users = await users_collection.count_documents({"is_active": {"$ne": False}})
     success_count = 0
     
     # ပို့နေကြောင်း Status အရင်ပြထားမယ် (ကြာသွားရင် စိတ်မပူအောင်လို့ပါ)
     status_msg = await update.message.reply_text(f"📣 Broadcast စတင်ပို့ဆောင်နေပါသည်...\nစုစုပေါင်း User အရေအတွက်: {total_users} ဦး")
+
+    # Memory မစားစေရန် async for ဖြင့် တစ်ယောက်ချင်းစီသာ ဆွဲထုတ်ခြင်း
+    async for user in users_collection.find({"is_active": {"$ne": False}}):
 
     # User တစ်ယောက်ချင်းစီဆီကို Loop ပတ်ပြီး စာပို့ခြင်း
     for user in users:
