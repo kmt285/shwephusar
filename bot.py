@@ -596,9 +596,6 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Memory မစားစေရန် async for ဖြင့် တစ်ယောက်ချင်းစီသာ ဆွဲထုတ်ခြင်း
     async for user in users_collection.find({"is_active": {"$ne": False}}):
-
-    # User တစ်ယောက်ချင်းစီဆီကို Loop ပတ်ပြီး စာပို့ခြင်း
-    for user in users:
         try:
             if reply_to_msg:
                 # Reply လုပ်ပြီး ပို့တာဆိုရင် copy_message ကို သုံးပါမယ် (ပုံ, ဗီဒီယို, File, Text အားလုံးရပါတယ်)
