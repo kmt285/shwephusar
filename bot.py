@@ -114,7 +114,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         
         # Welcome အနေဖြင့် ပြသမည့် လှပသော ဓာတ်ပုံ Link (Unsplash မှ အခမဲ့ပုံ)
         # (မိမိစိတ်ကြိုက် ပုံ Link ကိုလည်း ပြောင်းလဲထည့်သွင်းနိုင်ပါသည်)
-        WELCOME_IMG = "https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=800"
+        WELCOME_IMG = "AgACAgUAAxkBAAIGz2nUwkMTL8JVeim0QX8u8FAlKRApAAIhDmsbx_GhVijqJ3BeacN2AQADAgADeAADOwQ"
         
         try:
             # ဓာတ်ပုံနှင့်တကွ ကြိုဆိုမည်
