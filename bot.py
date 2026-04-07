@@ -192,9 +192,18 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Profile ဖန်တီးခြင်းကို ရပ်ဆိုင်းလိုက်ပါပြီ။")
+    await update.message.reply_text("လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
+
+# --- (ဒီအောက်က Code လေးကို အသစ်ထပ်တိုးပါ) ---
+async def prompt_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Profile ဖြည့်နေစဉ် တခြား Command နှိပ်မိပါက သတိပေးမည့် Function"""
+    await update.message.reply_text(
+        "⚠️ လုပ်ငန်းစဉ် မပြီးဆုံးသေးပါ။\n\n"
+        "❌ ရပ်ဆိုင်းလိုပါက: /cancel ကို နှိပ်ပါ။\n"
+        "🔄 အစကနေ ပြန်စလိုပါက: /start ကို နှိပ်ပါ။"
+    )
 
 
 # ==========================================
@@ -818,7 +827,9 @@ def main():
 
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # Registration Flow
+# -------------------------------------------------------------
+    # ၁။ Registration Flow (အစားထိုးရန်)
+    # -------------------------------------------------------------
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -830,25 +841,32 @@ def main():
             BIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bio)],
             PHOTO: [MessageHandler(filters.PHOTO, get_photo)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.COMMAND, prompt_cancel) # <--- အခြား Command နှိပ်မိလျှင် သတိပေးမည်
+        ],
+        allow_reentry=True # <--- အရေးကြီးဆုံး (အချိန်မရွေး /start ဖြင့် ပြန်စခွင့်ပေးသည်)
     )
     application.add_handler(conv_handler)
     
     # -------------------------------------------------------------
-    # Blue Tick Verification Handler အသစ် ထည့်သွင်းခြင်း
-    # Blue Tick Verification Handler
+    # ၂။ Blue Tick Verification Handler (အစားထိုးရန်)
+    # -------------------------------------------------------------
     verify_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("verify", verify_start),
-            MessageHandler(filters.Regex("^✅ အကောင့်အတည်ပြုရန်$"), verify_start) # <--- Menu ခလုတ်အတွက် အသစ်တိုးထားသည်
+            MessageHandler(filters.Regex("^✅ အကောင့်အတည်ပြုရန်$"), verify_start)
         ],
         states={
             VERIFY_PHOTO_STATE: [MessageHandler(filters.PHOTO, receive_verify_photo)],
         },
-        fallbacks=[CommandHandler("cancel", verify_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", verify_cancel),
+            MessageHandler(filters.COMMAND, prompt_cancel) # <--- အခြား Command နှိပ်မိလျှင် သတိပေးမည်
+        ],
+        allow_reentry=True # <--- အရေးကြီးဆုံး (အချိန်မရွေး ပြန်စခွင့်ပေးသည်)
     )
     application.add_handler(verify_conv_handler)
-    application.add_handler(CallbackQueryHandler(handle_verify_action, pattern="^verify_(approve|reject)_"))
 
     # Match Command နဲ့ Like/Pass Action 
     application.add_handler(CommandHandler("match", match_command))
