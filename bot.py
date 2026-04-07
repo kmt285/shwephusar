@@ -3,6 +3,7 @@ import logging
 import io
 import asyncio
 from dotenv import load_dotenv
+from telegram.error import Forbidden
 from telegram.constants import ChatAction
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from keep_alive import keep_alive
@@ -222,7 +223,7 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
     seen_users = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
     seen_users.append(current_user['user_id']) 
     
-    base_query = {"user_id": {"$nin": seen_users}}
+    base_query = {"user_id": {"$nin": seen_users}, "is_active": {"$ne": False}}
     if current_user['looking_for'] != "Both":
         base_query['gender'] = current_user['looking_for']
     base_query['looking_for'] = {"$in": [current_user['gender'], "Both"]}
@@ -422,6 +423,9 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_username = f"@{current_user['username']}" if current_user.get('username') else f"<a href='tg://user?id={current_user['user_id']}'>{current_user['name']}</a>"
             try:
                 await context.bot.send_message(chat_id=target_user_id, text=f"🎉 <b>Match အသစ် ရပါပြီ!</b>\n{current_user['name']} နဲ့ သင်တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {current_username}", parse_mode="HTML")
+            except Forbidden:
+                # Bot ကို Block ထားပါက Database တွင် အမှတ်အသားပြုမည်
+                await users_collection.update_one({"user_id": target_user_id}, {"$set": {"is_active": False}})
             except: pass
 
             # -------------------------------------------------------------
@@ -461,6 +465,8 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode="HTML"
                 )
+            except Forbidden:
+                await users_collection.update_one({"user_id": target_user_id}, {"$set": {"is_active": False}})
             except Exception as e:
                 logger.error(f"Failed to send superlike notification to {target_user_id}: {e}")
                 
@@ -617,8 +623,11 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML"
                 )
             success_count += 1
+        except Forbidden:
+            # User မှ Bot ကို Block ထားခြင်းဖြစ်၍ Database တွင် ပိတ်ထားမည်
+            await users_collection.update_one({"user_id": user["user_id"]}, {"$set": {"is_active": False}})
+            logger.warning(f"User {user['user_id']} blocked the bot. Marked as inactive.")
         except Exception as e:
-            # User က Bot ကို Block ထားရင် Error တက်နိုင်လို့ ကျော်သွားအောင် ရေးထားပါတယ်
             logger.error(f"Broadcast ပို့ရန် အဆင်မပြေပါ User ID {user['user_id']}: {e}")
 
     # ပို့ပြီးသွားရင် Status ကို Update ပြန်လုပ်ပေးမယ်
@@ -881,9 +890,11 @@ async def handle_verify_action(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(
                 chat_id=target_id, 
-                text="🎉 <b>ဂုဏ်ယူပါတယ်။</b> သင့်အကောင့်ကို အတည်ပြု (Verify) ပြီးပါပြီ။ သင့်နာမည်ဘေးတွင် အပြာရောင်အမှန်ခြစ် (✅) ပေါ်နေပါတော့မည်။", 
+                text="🎉 <b>ဂုဏ်ယူပါတယ်။</b> သင့်အကောင့်ကို အတည်ပြု (Verify) ပြီးပါပြီ။ ", 
                 parse_mode="HTML"
             )
+        except Forbidden:
+            await users_collection.update_one({"user_id": target_id}, {"$set": {"is_active": False}})
         except: pass
 
     elif action == "reject":
