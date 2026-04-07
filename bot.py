@@ -67,6 +67,14 @@ async def send_log(context: ContextTypes.DEFAULT_TYPE, message: str, photo_id: s
 # ==========================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.message.from_user.id
+    existing_user = await users_collection.find_one({"user_id": user_id})
+    
+    # Ban ခံထားရသူဖြစ်ပါက Bot အသုံးပြုခွင့်ကို လုံးဝ ပိတ်ပင်မည်
+    if existing_user and existing_user.get("is_banned"):
+        await update.message.reply_text("🚫 သင့်အကောင့်သည် စည်းမျဉ်းချိုးဖောက်မှုများကြောင့် ပိတ်ပင်ခံထားရပါသည်။")
+        return ConversationHandler.END
+
     if not update.message.from_user.username:
         await update.message.reply_text(
             "⚠️ သင့်အကောင့်မှာ Telegram Username မရှိသေးပါ။\n"
@@ -292,6 +300,9 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             ],
             [
                 InlineKeyboardButton("🌟 Super Like (3 Coins)", callback_data=f"superlike_{target_user['user_id']}")
+            ],
+            [
+                InlineKeyboardButton("⚠️ Report တင်မည်", callback_data=f"report_{target_user['user_id']}")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -398,6 +409,56 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_user_id = int(target_user_id_str)
     current_user_id = query.from_user.id
     current_user = await users_collection.find_one({"user_id": current_user_id})
+
+    # --- (၁) ADMIN BAN LOGIC ---
+    if action == "ban":
+        if str(current_user_id) != str(ADMIN_ID):
+            await query.answer("⛔ Admin သာလျှင် လုပ်ဆောင်နိုင်ပါသည်။", show_alert=True)
+            return
+        
+        # Database တွင် is_banned ကို True လုပ်ပြီး is_active ကို False လုပ်မည် (Match များတွင် မပေါ်တော့ရန်)
+        await users_collection.update_one({"user_id": target_user_id}, {"$set": {"is_banned": True, "is_active": False}})
+        await query.edit_message_caption(caption=f"{query.message.caption}\n\n🚫 <b>BANNED (အကောင့်ပိတ်လိုက်ပါပြီ)</b>", parse_mode="HTML")
+        
+        try: # ပိတ်ခံရသူထံသို့ အသိပေးစာပို့မည်
+            await context.bot.send_message(chat_id=target_user_id, text="🚫 <b>သင့်အကောင့်သည် စည်းမျဉ်းချိုးဖောက်မှုများကြောင့် Shwe Phusar မှ ပိတ်ပင်ခံလိုက်ရပါသည်။</b>", parse_mode="HTML")
+        except: pass
+        return
+
+    # --- (၂) REPORT LOGIC ---
+    if action == "report":
+        target_user = await users_collection.find_one({"user_id": target_user_id})
+        
+        # User တစ်ယောက်က တစ်ခါပဲ Report လို့ရအောင် တားမည်
+        if current_user_id in target_user.get("reported_by", []):
+            await query.answer("⚠️ ဤအကောင့်ကို သင် Report တင်ထားပြီးပါပြီ။", show_alert=True)
+        else:
+            await users_collection.update_one(
+                {"user_id": target_user_id},
+                {"$inc": {"report_count": 1}, "$addToSet": {"reported_by": current_user_id}}
+            )
+            await query.answer("✅ Report တင်ခြင်း အောင်မြင်ပါသည်။ Admin မှ စစ်ဆေးပေးပါမည်။", show_alert=True)
+            
+            # Admin ထံသို့ သတင်းလှမ်းပို့မည်
+            updated_target = await users_collection.find_one({"user_id": target_user_id})
+            report_count = updated_target.get("report_count", 1)
+            
+            admin_msg = (
+                f"🚨 <b>REPORT ALERT (အကောင့်တိုင်ကြားမှု)</b> 🚨\n\n"
+                f"⚠️ <b>တိုင်ကြားခံရသူ:</b> {target_user['name']} (<code>{target_user_id}</code>)\n"
+                f"👤 <b>တိုင်ကြားသူ:</b> {current_user['name']} (<code>{current_user_id}</code>)\n"
+                f"📊 <b>စုစုပေါင်း Report အကြိမ်ရေ:</b> {report_count}\n\n"
+                f"<i>(Report အကြိမ်ရေများနေပါက အောက်ပါခလုတ်ဖြင့် Banned ပြုလုပ်နိုင်ပါသည်။)</i>"
+            )
+            admin_keyboard = [[InlineKeyboardButton("🚫 Ban လုပ်မည် (အကောင့်ပိတ်ရန်)", callback_data=f"ban_{target_user_id}")]]
+            
+            try:
+                await context.bot.send_photo(chat_id=ADMIN_ID, photo=target_user['photo_id'], caption=admin_msg, reply_markup=InlineKeyboardMarkup(admin_keyboard), parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Failed to send report to admin: {e}")
+                
+        # Report တင်ပြီးသည်နှင့် ထိုသူကို မမြင်ရတော့အောင် Pass ခလုတ်နှိပ်သကဲ့သို့ အလိုအလျောက် ပြောင်းပေးမည်
+        action = "pass"
 
     if action == "superlike":
         if current_user.get("coins", 0) < 3:
@@ -979,7 +1040,7 @@ def main():
 
     # Match Command နဲ့ Like/Pass Action 
     application.add_handler(CommandHandler("match", match_command))
-    application.add_handler(CallbackQueryHandler(handle_action, pattern="^(like_|pass_|superlike_)"))
+    application.add_handler(CallbackQueryHandler(handle_action, pattern="^(like_|pass_|superlike_|report_|ban_)"))
     
     # My Profile Commands 
     application.add_handler(CommandHandler("myprofile", my_profile))
