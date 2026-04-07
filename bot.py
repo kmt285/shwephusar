@@ -247,50 +247,65 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
     seen_users = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
     seen_users.append(current_user['user_id']) 
     
-    base_query = {"user_id": {"$nin": seen_users}, "is_active": {"$ne": False}}
+    # Base Query: ကိုယ်ကြည့်ပြီးသားမဟုတ်သူ၊ Active ဖြစ်သူ၊ Ban မခံထားရသူ
+    match_query = {
+        "user_id": {"$nin": seen_users},
+        "is_active": {"$ne": False},
+        "is_banned": {"$ne": True}
+    }
+    
+    # လိင်ပိုင်းဆိုင်ရာ တိကျစွာစစ်ထုတ်ခြင်း (Strict Gender Match)
     if current_user['looking_for'] != "Both":
-        base_query['gender'] = current_user['looking_for']
-    base_query['looking_for'] = {"$in": [current_user['gender'], "Both"]}
+        match_query['gender'] = current_user['looking_for']
+    match_query['looking_for'] = {"$in": [current_user['gender'], "Both"]}
     
     target_user = None
 
-    if current_user.get('city') and current_user.get('age'):
-        query_1 = base_query.copy()
-        query_1['city'] = current_user['city']
-        query_1['age'] = current_user['age']
-        target_user = await users_collection.find_one(query_1)
-        
-    if not target_user and current_user.get('city'):
-        query_2 = base_query.copy()
-        query_2['city'] = current_user['city']
-        target_user = await users_collection.find_one(query_2)
+    # Priority 1: မြို့တူသော သူများထဲမှ ကျပန်း (Random) တစ်ယောက်ကို ဆွဲထုတ်ခြင်း
+    if current_user.get('city'):
+        query_city = match_query.copy()
+        query_city['city'] = current_user['city']
+        cursor = users_collection.aggregate([{"$match": query_city}, {"$sample": {"size": 1}}])
+        async for doc in cursor:
+            target_user = doc
 
+    # Priority 2: မြို့တူသူ မရှိတော့ပါက ကျန်သည့်မြို့များထဲမှ ကျပန်း (Random) ဆွဲထုတ်ခြင်း
     if not target_user:
-        target_user = await users_collection.find_one(base_query)
+        cursor = users_collection.aggregate([{"$match": match_query}, {"$sample": {"size": 1}}])
+        async for doc in cursor:
+            target_user = doc
     
+    # Priority 3: လူကုန်သွားပါက ကိုယ် Pass ခဲ့သူများကို Second Chance အနေဖြင့် ပြန်ပြပေးခြင်း
     if not target_user and current_user.get('passed'):
         second_chance_seen = current_user.get('likes', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
         second_chance_seen.append(current_user['user_id'])
         
-        query_second = {"user_id": {"$nin": second_chance_seen}}
+        query_second = {
+            "user_id": {"$nin": second_chance_seen},
+            "is_active": {"$ne": False},
+            "is_banned": {"$ne": True}
+        }
         if current_user['looking_for'] != "Both":
             query_second['gender'] = current_user['looking_for']
         query_second['looking_for'] = {"$in": [current_user['gender'], "Both"]}
         
-        target_user = await users_collection.find_one(query_second)
+        cursor = users_collection.aggregate([{"$match": query_second}, {"$sample": {"size": 1}}])
+        async for doc in cursor:
+            target_user = doc
+            
         if target_user:
+            # Pass စာရင်းကို Reset ချပေးမည်
             await users_collection.update_one({"user_id": current_user['user_id']}, {"$set": {"passed": []}})
 
-    # ... (အပေါ်က Code တွေက အရင်အတိုင်းပါ)
+    # --- Profile ပြသမည့် အပိုင်း ---
     if target_user:
-        # သီးသန့် အကောင့်အခြေအနေ (Status) ဖန်တီးခြင်း
-        status = "✅ အတည်ပြုပြီး (Verified User)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+        status = "✅ Verified User (အတည်ပြုပြီး)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
         
         caption = (
-            f"👤 အမည်: {target_user['name']}, {target_user.get('age', '-')} နှစ်\n"
+            f"👤 အမည်: <b>{target_user['name']}</b>, {target_user.get('age', '-')} နှစ်\n"
             f"📍 မြို့: {target_user.get('city', 'မသိပါ')}\n"
             f"🚻 ကျား/မ: {target_user['gender']}\n"
-            f"🛡️ အကောင့်အခြေအနေ: {status}\n"
+            f"🛡️ အကောင့်အခြေအနေ: <b>{status}</b>\n\n"
             f"📝 Bio: {target_user.get('bio', 'မရှိပါ')}"
         )
         keyboard = [
@@ -299,46 +314,41 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
                 InlineKeyboardButton("❤️ Like", callback_data=f"like_{target_user['user_id']}")
             ],
             [
-                InlineKeyboardButton("🌟 Super Like (3 Coins)", callback_data=f"superlike_{target_user['user_id']}")
+                InlineKeyboardButton("🌟 Super Like", callback_data=f"superlike_{target_user['user_id']}")
             ],
             [
-                InlineKeyboardButton("⚠️ Report တင်မည်", callback_data=f"report_{target_user['user_id']}")
+                InlineKeyboardButton("⚠️ Report တင်မည်", callback_data=f"report_{target_user['user_id']}") # Report ခလုတ်
             ]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # (အပေါ်က Keyboard နဲ့ Caption အပိုင်းတွေက အရင်အတိုင်းပါ)
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if is_callback:
             try:
                 await update.callback_query.message.delete()
             except: pass
-            # msg ကို return ယူပါမယ်
             msg = await context.bot.send_photo(
                 chat_id=update.callback_query.message.chat_id,
                 photo=target_user['photo_id'],
                 caption=caption,
-                reply_markup=reply_markup
+                reply_markup=reply_markup,
+                parse_mode="HTML"
             )
         else:
-            # msg ကို return ယူပါမယ်
-            msg = await update.message.reply_photo(photo=target_user['photo_id'], caption=caption, reply_markup=reply_markup)
+            msg = await update.message.reply_photo(
+                photo=target_user['photo_id'], 
+                caption=caption, 
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
             
-        # -------------------------------------------------------------
-        # ပို့လိုက်တဲ့ Message ID နဲ့ User ID ကို နောက်တစ်ခါ ဖျက်ဖို့/Pass ဖို့ မှတ်ထားမယ်
-        # -------------------------------------------------------------
         context.user_data['last_match_msg_id'] = msg.message_id
         context.user_data['last_viewed_user_id'] = target_user['user_id']
 
-    # Empty States: လူမရှိတော့လျှင် Profile ပြင်ရန် တိုက်တွန်းမည့်အပိုင်း
-    # -------------------------------------------------------------
     else:
         text = (
             "🏜️ <b>လောလောဆယ် သင့်အတွက် ကိုက်ညီမယ့်သူ ကုန်သွားပါပြီ!</b>\n\n"
             "💡 <b>အကြံပြုချက်:</b> သင့် Profile ဓာတ်ပုံကို ပိုမိုက်တဲ့ပုံ ပြောင်းခြင်း၊ မြို့နှင့် အချက်အလက်များ ပြင်ဆင်ခြင်းဖြင့် လူသစ်များနှင့် Match ပိုရနိုင်ပါတယ်။"
         )
-        # Profile ပြင်ရန် Button ကို တစ်ခါတည်း ထည့်ပေးထားမည်
         keyboard = [[InlineKeyboardButton("✏️ Profile ပြင်ဆင်မည်", callback_data="edit_profile")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -347,7 +357,7 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             await context.bot.send_message(chat_id=update.callback_query.message.chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup)
         else:
             await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
-
+            
 async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/match (သို့) 🔍 Match ရှာမည် နှိပ်လျှင် အလုပ်လုပ်မည့် Function"""
     user_id = update.message.from_user.id
