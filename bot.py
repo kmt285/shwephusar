@@ -68,65 +68,28 @@ async def send_log(context: ContextTypes.DEFAULT_TYPE, message: str, photo_id: s
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not update.message.from_user.username:
         await update.message.reply_text(
-            "⚠️ <b>သင့်အကောင့်မှာ Telegram Username မရှိသေးပါ။</b>\n\n"
-            "Match ဖြစ်တဲ့အခါ အခြားသူများက သင့်ကို ဆက်သွယ်နိုင်ရန် Telegram ရဲ့ Settings > Username မှာ အရင်သွားရောက် သတ်မှတ်ပေးပါ။\n\n"
-            "သတ်မှတ်ပြီးပါက /start ကို ပြန်နှိပ်ပါ။",
-            parse_mode="HTML"
+            "⚠️ သင့်အကောင့်မှာ Telegram Username မရှိသေးပါ။\n"
+            "Match ဖြစ်တဲ့အခါ အခြားသူများက သင့်ကို ဆက်သွယ်နိုင်ရန် Settings > Username မှာ အရင်သွားရောက် သတ်မှတ်ပေးပါ။\n\n"
+            "သတ်မှတ်ပြီးပါက /start ကို ပြန်နှိပ်ပါ။"
         )
         return ConversationHandler.END
         
     user_id = update.message.from_user.id
     existing_user = await users_collection.find_one({"user_id": user_id})
     
-    # (၁) User အဟောင်း (Edit လုပ်နေတာ မဟုတ်ဘူးဆိုရင် Menu ပြမည်)
+    # User လည်းရှိတယ်၊ Edit လုပ်နေတာလည်း မဟုတ်ဘူးဆိုရင်သာ တားပါမယ်
     if existing_user and not existing_user.get("is_editing", False):
         await update.message.reply_text(
-            f"မင်္ဂလာပါ <b>{existing_user['name']}</b> ခင်ဗျာ။ အောက်ပါ Menu များမှ တစ်ဆင့် ရွေးချယ်အသုံးပြုနိုင်ပါတယ်။",
-            parse_mode="HTML",
+            f"မင်္ဂလာပါ {existing_user['name']} ခင်ဗျာ။ အောက်ပါ Menu များမှ တစ်ဆင့် ရွေးချယ်အသုံးပြုနိုင်ပါတယ်။",
             reply_markup=get_main_menu()
         )
         return ConversationHandler.END
-        
-    # (၂) Edit လုပ်နေတဲ့ User ဆိုရင် (ရိုးရှင်းစွာ ပြမည်)
-    elif existing_user and existing_user.get("is_editing", True):
-        await update.message.reply_text(
-            "✏️ <b>Profile အသစ် ပြင်ဆင်ခြင်း</b>\n\n"
-            "သင့်နာမည် (သို့) ခေါ်စေချင်တဲ့ နာမည်ကို ရိုက်ထည့်ပါ။", 
-            parse_mode="HTML"
-        )
-        return NAME
-        
-    # (၃) လုံးဝ User အသစ်ဆိုရင် (လှပသော Welcome Screen ပြမည်)
     else:
-        # သဘာဝကျအောင် Typing လေး အရင်ပြမယ်
-        await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1.5)
-        
-        welcome_caption = (
-            "💖 <b>Shwe Phusar ရွှေဖူးစာ မှ နွေးထွေးစွာ ကြိုဆိုပါတယ်</b> 💖\n\n"
-            "ဒီ Bot လေးကနေတစ်ဆင့် သင်နဲ့ အကိုက်ညီဆုံး ဖူးစာရှင် (သို့) သူငယ်ချင်းသစ်များကို အလွယ်တကူ ရှာဖွေနိုင်ပါတယ်။\n\n"
-            "✨ <b>ပါဝင်တဲ့ Features များ:</b>\n"
-            "🔸 Smart Searching စနစ် 🔍\n"
-            "🔸 ✅ User Verify အတည်ပြုစနစ် 🛡️\n"
-            "🔸 🌟 Super Like ဖြင့် ချက်ချင်းသိစေနိုင်ခြင်း\n\n"
-            "🚀 စတင်ဖို့အတွက် သင့်ရဲ့ <b>နာမည် (သို့) ခေါ်စေချင်တဲ့ နာမည်ပြောင်</b> ကို အောက်မှာ စာရိုက်ပြီး ပို့ပေးပါ။ 👇"
+        await update.message.reply_text(
+            "Shwe Phusar (ရွှေဖူးစာ)မှကြိုဆိုပါတယ်။ 💖\n"
+            "ဖူးစာရှင်ရှာဖွေနိုင်ရန် သင့်ရဲ့ Profile ကို အရင်တည်ဆောက်ပါ။\n\n"
+            "သင့်နာမည် ဘယ်လိုခေါ်လဲ?"
         )
-        
-        # Welcome အနေဖြင့် ပြသမည့် လှပသော ဓာတ်ပုံ Link (Unsplash မှ အခမဲ့ပုံ)
-        # (မိမိစိတ်ကြိုက် ပုံ Link ကိုလည်း ပြောင်းလဲထည့်သွင်းနိုင်ပါသည်)
-        WELCOME_IMG = "AgACAgUAAxkBAAIGz2nUwkMTL8JVeim0QX8u8FAlKRApAAIhDmsbx_GhVijqJ3BeacN2AQADAgADeAADOwQ"
-        
-        try:
-            # ဓာတ်ပုံနှင့်တကွ ကြိုဆိုမည်
-            await update.message.reply_photo(
-                photo=WELCOME_IMG, 
-                caption=welcome_caption, 
-                parse_mode="HTML"
-            )
-        except Exception:
-            # အကယ်၍ ဓာတ်ပုံ Link အလုပ်မလုပ်ပါက စာသားသက်သက်ဖြင့် ကြိုဆိုမည်
-            await update.message.reply_text(welcome_caption, parse_mode="HTML")
-            
         return NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -934,15 +897,6 @@ async def handle_verify_action(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         except: pass
 
-async def get_image_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin မှ ဓာတ်ပုံပို့လျှင် File ID ကို ချက်ချင်းပြန်ထုတ်ပေးမည့် လျှို့ဝှက် Function"""
-    if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        await update.message.reply_text(
-            f"📥 <b>သင့်ဓာတ်ပုံ၏ File ID မှာ:</b>\n\n<code>{file_id}</code>\n\n(<i>ကူးယူရန် အပေါ်ကစာသားကို တစ်ချက်နှိပ်ပါ</i>)", 
-            parse_mode="HTML"
-        )
-
 
 # ==========================================
 # 5. Main Logic
@@ -1027,8 +981,6 @@ def main():
     
     # Help Menu
     application.add_handler(CommandHandler("help", help_command))
-
-    application.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, get_image_id))
 
     logger.info("Bot is starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
