@@ -279,18 +279,30 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        # (အပေါ်က Keyboard နဲ့ Caption အပိုင်းတွေက အရင်အတိုင်းပါ)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         if is_callback:
-            await update.callback_query.message.delete()
-            await context.bot.send_photo(
+            try:
+                await update.callback_query.message.delete()
+            except: pass
+            # msg ကို return ယူပါမယ်
+            msg = await context.bot.send_photo(
                 chat_id=update.callback_query.message.chat_id,
                 photo=target_user['photo_id'],
                 caption=caption,
                 reply_markup=reply_markup
             )
         else:
-            await update.message.reply_photo(photo=target_user['photo_id'], caption=caption, reply_markup=reply_markup)
+            # msg ကို return ယူပါမယ်
+            msg = await update.message.reply_photo(photo=target_user['photo_id'], caption=caption, reply_markup=reply_markup)
             
-    # -------------------------------------------------------------
+        # -------------------------------------------------------------
+        # ပို့လိုက်တဲ့ Message ID နဲ့ User ID ကို နောက်တစ်ခါ ဖျက်ဖို့/Pass ဖို့ မှတ်ထားမယ်
+        # -------------------------------------------------------------
+        context.user_data['last_match_msg_id'] = msg.message_id
+        context.user_data['last_viewed_user_id'] = target_user['user_id']
+
     # Empty States: လူမရှိတော့လျှင် Profile ပြင်ရန် တိုက်တွန်းမည့်အပိုင်း
     # -------------------------------------------------------------
     else:
@@ -316,27 +328,55 @@ async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not current_user:
         await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပြီး အရင်ဖန်တီးပါ။")
         return
+
+    # -------------------------------------------------------------
+    # UX မြှင့်တင်ခြင်း: Chat ရှင်းလင်းရေး နှင့် Auto-Pass စနစ်
+    # -------------------------------------------------------------
+    # ယခင်ပြထားတဲ့ Profile ရှိနေရင် Chat ရှုပ်မနေအောင် အရင်ဖျက်မယ်
+    if 'last_match_msg_id' in context.user_data:
+        try:
+            await context.bot.delete_message(chat_id=user_id, message_id=context.user_data['last_match_msg_id'])
+        except Exception:
+            pass # ဖျက်ပြီးသားဖြစ်နေရင် ကျော်သွားမယ်
+            
+        # Like/Pass မနှိပ်ဘဲ Match ကို ထပ်နှိပ်ရင် "Pass" လုပ်တယ်လို့ အလိုအလျောက် သတ်မှတ်မယ် (နောက်တစ်ယောက်ကို ပြောင်းပြအောင်လို့ပါ)
+        if 'last_viewed_user_id' in context.user_data:
+            last_viewed_id = context.user_data['last_viewed_user_id']
+            target_str_id = str(last_viewed_id)
+            
+            await users_collection.update_one(
+                {"user_id": user_id},
+                {
+                    "$addToSet": {"passed": last_viewed_id},
+                    "$inc": {f"pass_counts.{target_str_id}": 1}
+                }
+            )
+            
+            # ၃ ခါပြည့်စစ်ဆေးခြင်း
+            updated_user = await users_collection.find_one({"user_id": user_id})
+            pass_count = updated_user.get("pass_counts", {}).get(target_str_id, 0)
+            if pass_count >= 3:
+                await users_collection.update_one(
+                    {"user_id": user_id}, 
+                    {"$addToSet": {"hard_passed": last_viewed_id}}
+                )
+                
+    # Auto-pass လုပ်ပြီးသွားတဲ့ Database အသစ်ကို ပြန်ခေါ်မယ်
+    current_user = await users_collection.find_one({"user_id": user_id})
         
     # -------------------------------------------------------------
-    # UX မြှင့်တင်ခြင်း: Typing ပြမည်၊ စာတိုလေးပြမည်၊ ပြီးမှ ဖျက်ပြီး ပုံပြမည်
-    # -------------------------------------------------------------
     await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-    
-    # ယာယီ Loading စာသားလေး ပို့ထားမယ်
     loading_msg = await update.message.reply_text("🔍 <i>သင့်အတွက် အကောင်းဆုံး ဖူးစာရှင်ကို ရှာဖွေနေပါတယ်...</i>", parse_mode="HTML")
-    
-    # Database ထဲက ရှာနေတယ်လို့ ထင်သွားအောင် (၁) စက္ကန့်လောက် သဘာဝကျကျ စောင့်ပေးမယ်
-    await asyncio.sleep(1) 
-    
-    # Loading စာသားကို ပြန်ဖျက်မယ်
+    await asyncio.sleep(1)
     await loading_msg.delete()
     
-    # ပြီးမှ Profile ပုံကို ဆွဲထုတ်ပြမယ်
     await show_next_profile(current_user, update, context)
-
+    
 async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
+    context.user_data.pop('last_match_msg_id', None)
+    context.user_data.pop('last_viewed_user_id', None)
     action, target_user_id_str = data.split("_")[0], data.split("_")[1]
     target_user_id = int(target_user_id_str)
     current_user_id = query.from_user.id
