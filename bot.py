@@ -3,8 +3,7 @@ import logging
 import io
 import asyncio
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from keep_alive import keep_alive
 from telegram.ext import (
     Application,
@@ -38,6 +37,16 @@ users_collection = db.users
 # Conversation States (AGE နဲ့ CITY ထပ်တိုးထားပါတယ်)
 NAME, GENDER, LOOKING_FOR, AGE, CITY, BIO, PHOTO = range(7)
 
+def get_main_menu():
+    """အမြဲတမ်းပေါ်နေမယ့် Main Menu ခလုတ်များ ဖန်တီးသည့် Function"""
+    keyboard = [
+        [KeyboardButton("🔍 Match ရှာမည် 💖")],
+        [KeyboardButton("👤 ကျွန်ုပ်၏ Profile"), KeyboardButton("👀 လျှို့ဝှက် Like များ")],
+        [KeyboardButton("🎁 နေ့စဉ် Coin ယူမည်"), KeyboardButton("✅ အကောင့်အတည်ပြုရန်")]
+    ]
+    # resize_keyboard က ခလုတ်ကို ဖုန်းစခရင်နဲ့ ကွက်တိဖြစ်အောင် ညှိပေးပြီး၊ is_persistent က အမြဲပေါ်နေအောင် လုပ်ပေးပါတယ်
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
 async def send_log(context: ContextTypes.DEFAULT_TYPE, message: str, photo_id: str = None):
     """Admin Log Channel သို့ ဓာတ်ပုံနှင့်တကွ သတင်းလှမ်းပို့မည့် Function"""
     if LOG_CHANNEL_ID:
@@ -70,7 +79,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # User လည်းရှိတယ်၊ Edit လုပ်နေတာလည်း မဟုတ်ဘူးဆိုရင်သာ တားပါမယ်
     if existing_user and not existing_user.get("is_editing", False):
         await update.message.reply_text(
-            f"မင်္ဂလာပါ {existing_user['name']} ခင်ဗျာ။ သင်က Profile ရှိပြီးသားဖြစ်ပါတယ်။ ဖူးစာရှင်ရှာဖို့ /match ကို နှိပ်ပါ။"
+            f"မင်္ဂလာပါ {existing_user['name']} ခင်ဗျာ။ အောက်ပါ Menu များမှ တစ်ဆင့် ရွေးချယ်အသုံးပြုနိုင်ပါတယ်။",
+            reply_markup=get_main_menu()
         )
         return ConversationHandler.END
     else:
@@ -158,7 +168,10 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         upsert=True
     )
     
-    await update.message.reply_text("🎉 Profile အောင်မြင်စွာ တည်ဆောက်ပြီးပါပြီ!\nMatch စတင်ရှာဖွေရန်: /match ကိုနှိပ်ပါ။")
+    await update.message.reply_text(
+        "🎉 Profile အောင်မြင်စွာ တည်ဆောက်ပြီးပါပြီ!\nအောက်ပါ Menu ခလုတ်များမှတစ်ဆင့် အလွယ်တကူ စတင်အသုံးပြုနိုင်ပါပြီ။",
+        reply_markup=get_main_menu()
+    )
     
     # -------------------------------------------------------------
     # Log Channel သို့ လူသစ်ရောက်ကြောင်း ပို့မည့်အပိုင်း
@@ -823,9 +836,12 @@ def main():
     
     # -------------------------------------------------------------
     # Blue Tick Verification Handler အသစ် ထည့်သွင်းခြင်း
-    # -------------------------------------------------------------
+    # Blue Tick Verification Handler
     verify_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("verify", verify_start)],
+        entry_points=[
+            CommandHandler("verify", verify_start),
+            MessageHandler(filters.Regex("^✅ အကောင့်အတည်ပြုရန်$"), verify_start) # <--- Menu ခလုတ်အတွက် အသစ်တိုးထားသည်
+        ],
         states={
             VERIFY_PHOTO_STATE: [MessageHandler(filters.PHOTO, receive_verify_photo)],
         },
@@ -850,6 +866,13 @@ def main():
     application.add_handler(CommandHandler("likes", check_likes_command))
     application.add_handler(CallbackQueryHandler(handle_reveal_like, pattern="^reveal_like$"))
     application.add_handler(CommandHandler("daily", daily_reward))
+
+    # Main Menu Button Handlers (အမြဲတမ်းပေါ်နေသော ခလုတ်များအတွက်)
+    # -------------------------------------------------------------
+    application.add_handler(MessageHandler(filters.Regex("^🔍 Match ရှာမည် 💖$"), match_command))
+    application.add_handler(MessageHandler(filters.Regex("^👤 ကျွန်ုပ်၏ Profile$"), my_profile))
+    application.add_handler(MessageHandler(filters.Regex("^👀 လျှို့ဝှက် Like များ$"), check_likes_command))
+    application.add_handler(MessageHandler(filters.Regex("^🎁 နေ့စဉ် Coin ယူမည်$"), daily_reward))
     
     # Help Menu
     application.add_handler(CommandHandler("help", help_command))
