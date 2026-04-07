@@ -38,6 +38,7 @@ users_collection = db.users
 
 NAME, GENDER, LOOKING_FOR, AGE, CITY, BIO, PHOTO = range(7)
 EDIT_CHOICE, PARTIAL_TEXT, PARTIAL_PHOTO = range(7, 10)
+ICEBREAKER_TEXT = 10 # <--- Direct Message (Icebreaker) အတွက် အသစ်
 
 def get_main_menu():
     """အမြဲတမ်းပေါ်နေမယ့် Main Menu ခလုတ်များ ဖန်တီးသည့် Function"""
@@ -314,10 +315,11 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
                 InlineKeyboardButton("❤️ Like", callback_data=f"like_{target_user['user_id']}")
             ],
             [
-                InlineKeyboardButton("🌟 Super Like", callback_data=f"superlike_{target_user['user_id']}")
+                InlineKeyboardButton("🌟 Super Like (3 Coins)", callback_data=f"superlike_{target_user['user_id']}"),
+                InlineKeyboardButton("💌 စကားကြိုပြောမည်", callback_data=f"icebreaker_{target_user['user_id']}")
             ],
             [
-                InlineKeyboardButton("⚠️ Report တင်မည်", callback_data=f"report_{target_user['user_id']}") # Report ခလုတ်
+                InlineKeyboardButton("⚠️ Report တင်မည်", callback_data=f"report_{target_user['user_id']}") 
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -561,6 +563,90 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     current_user_updated = await users_collection.find_one({"user_id": current_user_id})
     await show_next_profile(current_user_updated, update, context, is_callback=True)
+
+async def start_icebreaker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Icebreaker ခလုတ်နှိပ်လျှင် Coin စစ်ဆေးပြီး စာသားတောင်းမည့် Function"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    target_id = int(query.data.split("_")[1])
+
+    current_user = await users_collection.find_one({"user_id": user_id})
+    is_vip = current_user.get("is_vip", False)
+
+    # VIP မဟုတ်လျှင် 5 Coins ရှိမရှိ စစ်ဆေးမည်
+    if current_user.get("coins", 0) < 5 and not is_vip:
+        await query.answer("❌ Coin မလောက်ပါ။ Message ပို့ရန် 5 Coins လိုအပ်ပါသည်။", show_alert=True)
+        return ConversationHandler.END
+
+    # ပို့မည့်သူ၏ ID ကို မှတ်သားထားမည်
+    context.user_data['icebreaker_target'] = target_id
+    
+    try: await query.message.delete()
+    except: pass
+    
+    coin_text = "(အခမဲ့)" if is_vip else "(5 Coins ကျသင့်မည်)"
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=f"💌 <b>စကားကြိုပြောမည် (Icebreaker)</b> {coin_text}\n\n"
+             f"သူ့ကို ပို့ချင်တဲ့ စာသား (Message) ကို အခု ရိုက်ထည့်လိုက်ပါ။\n"
+             f"<i>(ဥပမာ - မင်္ဂလာပါ၊ Profile လေးကို သဘောကျသွားလို့ပါ...)</i>\n\n"
+             f"❌ မပို့တော့ပါက /cancel ကို နှိပ်ပါ။",
+        parse_mode="HTML"
+    )
+    return ICEBREAKER_TEXT
+
+async def send_icebreaker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ရိုက်ထည့်လိုက်သော စာသားကို တစ်ဖက်လူထံ လှမ်းပို့မည့် Function"""
+    user_id = update.message.from_user.id
+    target_id = context.user_data.get('icebreaker_target')
+    message_text = update.message.text
+
+    current_user = await users_collection.find_one({"user_id": user_id})
+    is_vip = current_user.get("is_vip", False)
+
+    # VIP မဟုတ်မှသာ 5 Coins နုတ်မည်
+    if not is_vip:
+        await users_collection.update_one({"user_id": user_id}, {"$inc": {"coins": -5}})
+
+    # Like ထားသူစာရင်းထဲ အလိုအလျောက် ထည့်မည်
+    await users_collection.update_one({"user_id": user_id}, {"$addToSet": {"likes": target_id}})
+
+    # တစ်ဖက်လူထံသို့ ဓာတ်ပုံနှင့်တကွ Message လှမ်းပို့မည်
+    status = "✅ Verified User (အတည်ပြုပြီး)" if current_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+    caption = (
+        f"💌 <b>သင့်ဆီကို စကားကြိုပြောထားတဲ့သူ ရှိနေပါတယ်!</b>\n\n"
+        f"💬 <b>သူပြောထားတဲ့စာ:</b> <i>\"{message_text}\"</i>\n\n"
+        f"👤 အမည်: <b>{current_user['name']}</b> ({current_user.get('age', '-')} နှစ်)\n"
+        f"📍 မြို့: {current_user.get('city', 'မသိပါ')}\n"
+        f"🚻 ကျား/မ: {current_user['gender']}\n"
+        f"🛡️ အကောင့်အခြေအနေ: <b>{status}</b>\n\n"
+        f"📝 Bio: {current_user.get('bio', 'မရှိပါ')}"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("❌ Pass", callback_data=f"pass_{user_id}"),
+            InlineKeyboardButton("❤️ Match ပြန်လုပ်မည်", callback_data=f"like_{user_id}")
+        ]
+    ]
+    try:
+        await context.bot.send_photo(
+            chat_id=target_id,
+            photo=current_user['photo_id'],
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    except: pass
+
+    # ပို့သူကို အောင်မြင်ကြောင်းပြပြီး နောက်တစ်ယောက်ကို ဆက်ပြမည်
+    await update.message.reply_text("✅ သင့်ရဲ့ Message ကို အောင်မြင်စွာ ပို့လိုက်ပါပြီ!")
+    
+    current_user_updated = await users_collection.find_one({"user_id": user_id})
+    await show_next_profile(current_user_updated, update, context)
+    
+    context.user_data.clear()
+    return ConversationHandler.END
 
 # ==========================================
 # 3. My Profile System
@@ -1115,6 +1201,17 @@ def main():
         allow_reentry=True # <--- အရေးကြီးဆုံး (အချိန်မရွေး ပြန်စခွင့်ပေးသည်)
     )
     application.add_handler(verify_conv_handler)
+
+    # Icebreaker System Handler
+    icebreaker_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_icebreaker, pattern="^icebreaker_")],
+        states={
+            ICEBREAKER_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_icebreaker)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False
+    )
+    application.add_handler(icebreaker_conv_handler)
 
     # Match Command နဲ့ Like/Pass Action 
     application.add_handler(CommandHandler("match", match_command))
