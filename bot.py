@@ -983,7 +983,6 @@ def main():
     
     # My Profile Commands 
     application.add_handler(CommandHandler("myprofile", my_profile))
-    application.add_handler(CallbackQueryHandler(handle_edit_profile, pattern="^edit_profile$"))
     
     # Admin Features
     application.add_handler(CommandHandler("broadcast", broadcast))
