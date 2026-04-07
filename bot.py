@@ -3,6 +3,7 @@ import logging
 import io
 import asyncio
 from dotenv import load_dotenv
+from telegram.constants import ChatAction
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from keep_alive import keep_alive
 from telegram.ext import (
@@ -289,12 +290,29 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             await update.message.reply_text(text)
 
 async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/match (သို့) 🔍 Match ရှာမည် နှိပ်လျှင် အလုပ်လုပ်မည့် Function"""
     user_id = update.message.from_user.id
     current_user = await users_collection.find_one({"user_id": user_id})
+    
     if not current_user:
         await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပြီး အရင်ဖန်တီးပါ။")
         return
-    await update.message.reply_text("🔍 သင့်အတွက် ကိုက်ညီမယ့် ဖူးစာရှင်ကို ရှာဖွေနေပါတယ်...")
+        
+    # -------------------------------------------------------------
+    # UX မြှင့်တင်ခြင်း: Typing ပြမည်၊ စာတိုလေးပြမည်၊ ပြီးမှ ဖျက်ပြီး ပုံပြမည်
+    # -------------------------------------------------------------
+    await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+    
+    # ယာယီ Loading စာသားလေး ပို့ထားမယ်
+    loading_msg = await update.message.reply_text("🔍 <i>သင့်အတွက် အကောင်းဆုံး ဖူးစာရှင်ကို ရှာဖွေနေပါတယ်...</i>", parse_mode="HTML")
+    
+    # Database ထဲက ရှာနေတယ်လို့ ထင်သွားအောင် (၁) စက္ကန့်လောက် သဘာဝကျကျ စောင့်ပေးမယ်
+    await asyncio.sleep(1) 
+    
+    # Loading စာသားကို ပြန်ဖျက်မယ်
+    await loading_msg.delete()
+    
+    # ပြီးမှ Profile ပုံကို ဆွဲထုတ်ပြမယ်
     await show_next_profile(current_user, update, context)
 
 async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -386,7 +404,9 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 logger.error(f"Failed to send superlike notification to {target_user_id}: {e}")
-
+                
+    await context.bot.send_chat_action(chat_id=current_user_id, action=ChatAction.TYPING)
+    
     current_user_updated = await users_collection.find_one({"user_id": current_user_id})
     await show_next_profile(current_user_updated, update, context, is_callback=True)
 
@@ -396,6 +416,10 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def my_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    
+    # --- "sending photo..." လေး ပြပေးမည့် အပိုင်း ---
+    await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.UPLOAD_PHOTO)
+    
     user = await users_collection.find_one({"user_id": user_id})
     
     if not user:
@@ -546,8 +570,12 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 
 async def check_likes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/likes နှိပ်လျှင် မိမိကို Like ထားသူများကို စစ်ဆေးမည့် Function"""
+    """👀 လျှို့ဝှက် Like များ ကို နှိပ်လျှင် အလုပ်လုပ်မည့် Function"""
     user_id = update.message.from_user.id
+    
+    # --- "typing..." လေး ပြပေးမည့် အပိုင်း ---
+    await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+    
     current_user = await users_collection.find_one({"user_id": user_id})
 
     if not current_user:
