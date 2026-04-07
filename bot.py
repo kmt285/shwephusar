@@ -36,8 +36,8 @@ db_client = AsyncIOMotorClient(MONGO_URI)
 db = db_client.match_bot_db
 users_collection = db.users
 
-# Conversation States (AGE နဲ့ CITY ထပ်တိုးထားပါတယ်)
 NAME, GENDER, LOOKING_FOR, AGE, CITY, BIO, PHOTO = range(7)
+EDIT_CHOICE, PARTIAL_TEXT, PARTIAL_PHOTO = range(7, 10)
 
 def get_main_menu():
     """အမြဲတမ်းပေါ်နေမယ့် Main Menu ခလုတ်များ ဖန်တီးသည့် Function"""
@@ -591,16 +591,79 @@ async def start_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     user_id = query.from_user.id
     
-    # Profile စတင်ပြင်ဆင်ကြောင်း Database တွင် မှတ်သားမည်
-    await users_collection.update_one({"user_id": user_id}, {"$set": {"is_editing": True}})
+    keyboard = [
+        [InlineKeyboardButton("👤 နာမည် ပြင်မည်", callback_data="edit_opt_name"), InlineKeyboardButton("🎂 အသက် ပြင်မည်", callback_data="edit_opt_age")],
+        [InlineKeyboardButton("📍 မြို့ ပြင်မည်", callback_data="edit_opt_city"), InlineKeyboardButton("📝 Bio ပြင်မည်", callback_data="edit_opt_bio")],
+        [InlineKeyboardButton("📸 ဓာတ်ပုံ ပြောင်းမည်", callback_data="edit_opt_photo")],
+        [InlineKeyboardButton("❌ မပြင်တော့ပါ (Cancel)", callback_data="edit_opt_cancel")]
+    ]
     
-    await query.message.delete()
-    # /start ကို ပြန်နှိပ်ခိုင်းစရာမလိုဘဲ ချက်ချင်း နာမည်စမေးပါမည် (ပိုမိုကောင်းမွန်သော UX)
+    try: await query.message.delete()
+    except: pass
+    
     await context.bot.send_message(
         chat_id=user_id,
-        text="✅ သင့် Profile အချက်အလက်များကို ပြင်ဆင်ရန် အသင့်ဖြစ်ပါပြီ။\n\nသင့်နာမည် ဘယ်လိုခေါ်လဲ?"
+        text="✏️ <b>Profile ပြင်ဆင်ခြင်း</b>\n\nမည်သည့်အချက်အလက်ကို ပြင်ဆင်လိုပါသလဲ? အောက်ပါခလုတ်များမှ ရွေးချယ်ပါ။",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
     )
-    return NAME
+    return EDIT_CHOICE
+
+async def handle_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ဘာကိုပြင်မလဲ ရွေးချယ်မှုကို လက်ခံမည့် Function"""
+    query = update.callback_query
+    await query.answer()
+    choice = query.data.split("_")[2] # name, age, city, bio, photo, cancel
+    
+    if choice == "cancel":
+        await query.message.delete()
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Profile ပြင်ဆင်ခြင်းကို ရပ်ဆိုင်းလိုက်ပါပြီ။", reply_markup=get_main_menu())
+        return ConversationHandler.END
+        
+    context.user_data['edit_field'] = choice
+    
+    prompts = {
+        "name": "👤 သင့်နာမည်အသစ်ကို ရိုက်ထည့်ပါ။",
+        "age": "🎂 သင့်အသက်အသစ်ကို ဂဏန်းဖြင့် ရိုက်ထည့်ပါ။ (ဥပမာ - 22)",
+        "city": "📍 သင်ယခုနေထိုင်သည့် မြို့အမည်သစ်ကို ရိုက်ထည့်ပါ။",
+        "bio": "📝 သင့်အကြောင်း Bio အသစ်ကို ရေးပေးပါ။",
+        "photo": "📸 သင့် Profile ဓာတ်ပုံအသစ်ကို ပို့ပေးပါ။ (Photo အနေဖြင့်ပို့ပါ)"
+    }
+    
+    await query.message.edit_text(prompts[choice])
+    return PARTIAL_PHOTO if choice == "photo" else PARTIAL_TEXT
+
+async def receive_partial_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """စာသားအသစ် ပြင်ဆင်ခြင်းကို Database တွင် သိမ်းမည့် Function"""
+    user_id = update.message.from_user.id
+    field = context.user_data.get('edit_field')
+    new_text = update.message.text
+    
+    if field == "name":
+        # နာမည်တွင် ✅ အတုများ မပါစေရန် စစ်ထုတ်မည်
+        new_text = new_text.replace("✅", "").replace("✔️", "").strip()
+        
+    await users_collection.update_one({"user_id": user_id}, {"$set": {field: new_text}})
+    
+    await update.message.reply_text("✅ အောင်မြင်စွာ ပြင်ဆင်ပြီးပါပြီ။", reply_markup=get_main_menu())
+    await my_profile(update, context) # ပြင်ပြီးသား Profile ကို ချက်ချင်း ပြန်ပြပေးမည်
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def receive_partial_edit_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ဓာတ်ပုံအသစ် ပြင်ဆင်ခြင်းကို Database တွင် သိမ်းမည့် Function"""
+    user_id = update.message.from_user.id
+    photo_file_id = update.message.photo[-1].file_id
+    
+    await users_collection.update_one({"user_id": user_id}, {"$set": {"photo_id": photo_file_id}})
+    
+    # ဓာတ်ပုံအသစ်တင်လိုက်ပါက သူများတွေဆီမှာ ပြန်ပေါ်စေရန် Pass လုပ်ထားသော စာရင်းထဲမှ ဖယ်ထုတ်မည်
+    await users_collection.update_many({}, {"$pull": {"passed": user_id}})
+    
+    await update.message.reply_text("✅ ဓာတ်ပုံအသစ်ကို အောင်မြင်စွာ ပြောင်းလဲပြီးပါပြီ။", reply_markup=get_main_menu())
+    await my_profile(update, context)
+    context.user_data.clear()
+    return ConversationHandler.END
     
 async def get_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin မှ User စာရင်းနှင့် အရေအတွက်ကို txt ဖိုင်ဖြင့် ထုတ်ယူမည့် Function (/user)"""
@@ -1000,7 +1063,7 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            CallbackQueryHandler(start_edit_profile, pattern="^edit_profile$") # <--- ဒီစာကြောင်း အသစ်တိုးလာပါမည်
+            CallbackQueryHandler(start_edit_profile, pattern="^edit_profile$") 
         ],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
@@ -1010,6 +1073,11 @@ def main():
             CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_city)],
             BIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bio)],
             PHOTO: [MessageHandler(filters.PHOTO, get_photo)],
+            
+            # --- Partial Edit အတွက် အသစ်တိုးလာမည့် အပိုင်း ---
+            EDIT_CHOICE: [CallbackQueryHandler(handle_edit_choice, pattern="^edit_opt_")],
+            PARTIAL_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_partial_edit_text)],
+            PARTIAL_PHOTO: [MessageHandler(filters.PHOTO, receive_partial_edit_photo)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
