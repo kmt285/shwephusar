@@ -78,8 +78,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.message.from_user.id
     existing_user = await users_collection.find_one({"user_id": user_id})
     
-    # User လည်းရှိတယ်၊ Edit လုပ်နေတာလည်း မဟုတ်ဘူးဆိုရင်သာ တားပါမယ်
-    if existing_user and not existing_user.get("is_editing", False):
+    # User လည်းရှိပြီးသား (နာမည်ဖြည့်ထားပြီးသား) ဆိုရင် Main Menu ကိုပဲ အမြဲပြပေးပါမည်။
+    if existing_user and existing_user.get("name"):
+        # အကယ်၍ Profile ပြင်နေရင်း (is_editing: True) တန်းလန်းနဲ့ /start ပြန်နှိပ်မိရင် False ပြန်ပြောင်းပေးမည်
+        if existing_user.get("is_editing"):
+            await users_collection.update_one({"user_id": user_id}, {"$set": {"is_editing": False}})
+            
         await update.message.reply_text(
             f"မင်္ဂလာပါ {existing_user['name']} ခင်ဗျာ။ အောက်ပါ Menu များမှ တစ်ဆင့် ရွေးချယ်အသုံးပြုနိုင်ပါတယ်။",
             reply_markup=get_main_menu()
@@ -201,10 +205,22 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။")
+    user_id = update.message.from_user.id
+    
+    # Profile ပြင်နေရင်း Cancel လုပ်ခဲ့ရင် Error မဖြစ်အောင် is_editing ကို False ပြန်ထားပေးမည်
+    await users_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"is_editing": False}}
+    )
+    
+    # User မျက်စိမလည်သွားစေရန် Main Menu ကိုပါ တစ်ခါတည်း ပြန်ထုတ်ပေးပါမည်
+    await update.message.reply_text(
+        "❌ လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။",
+        reply_markup=get_main_menu() 
+    )
     context.user_data.clear()
     return ConversationHandler.END
-
+    
 # --- (ဒီအောက်က Code လေးကို အသစ်ထပ်တိုးပါ) ---
 async def prompt_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Profile ဖြည့်နေစဉ် တခြား Command နှိပ်မိပါက သတိပေးမည့် Function"""
@@ -509,20 +525,22 @@ async def my_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_photo(photo=user['photo_id'], caption=caption, reply_markup=reply_markup)
 
-async def handle_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     
-    # ဖျက်မယ့်အစား is_editing: True လို့ သတ်မှတ်ပါမယ် (ဒါမှ Coin တွေ၊ Match တွေ မပျောက်မှာပါ)
+    # Profile စတင်ပြင်ဆင်ကြောင်း Database တွင် မှတ်သားမည်
     await users_collection.update_one({"user_id": user_id}, {"$set": {"is_editing": True}})
     
     await query.message.delete()
+    # /start ကို ပြန်နှိပ်ခိုင်းစရာမလိုဘဲ ချက်ချင်း နာမည်စမေးပါမည် (ပိုမိုကောင်းမွန်သော UX)
     await context.bot.send_message(
         chat_id=user_id,
-        text="✅ သင့် Profile အချက်အလက်ဟောင်းများကို ပြင်ဆင်ရန် အသင့်ဖြစ်ပါပြီ။\nအချက်အလက်များ အသစ်ပြန်လည် ဖြည့်စွက်ရန် /start ကို နှိပ်ပါ။"
+        text="✅ သင့် Profile အချက်အလက်များကို ပြင်ဆင်ရန် အသင့်ဖြစ်ပါပြီ။\n\nသင့်နာမည် ဘယ်လိုခေါ်လဲ?"
     )
-
+    return NAME
+    
 async def get_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin မှ User စာရင်းနှင့် အရေအတွက်ကို txt ဖိုင်ဖြင့် ထုတ်ယူမည့် Function (/user)"""
     user_id = update.message.from_user.id
@@ -919,7 +937,10 @@ def main():
     # ၁။ Registration Flow (အစားထိုးရန်)
     # -------------------------------------------------------------
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(start_edit_profile, pattern="^edit_profile$") # <--- ဒီစာကြောင်း အသစ်တိုးလာပါမည်
+        ],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
             GENDER: [CallbackQueryHandler(get_gender, pattern="^(Male|Female)$")],
