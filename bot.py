@@ -153,11 +153,11 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "city": context.user_data['city'],
                 "bio": context.user_data['bio'],
                 "photo_id": photo_file_id,
+                "passed": [], # <--- (၁) ကိုယ့်ရဲ့ Pass စာရင်းကို အသစ်ပြန်ဖျက်ပေးမည်
                 "is_editing": False 
             },
             "$setOnInsert": {
                 "likes": [],     
-                "passed": [],    
                 "matches": [],
                 "hard_passed": [],
                 "pass_counts": {},
@@ -169,18 +169,25 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         upsert=True
     )
     
+    # -------------------------------------------------------------
+    # (၂) သူများတွေရဲ့ Pass စာရင်းထဲကနေ ကိုယ့်ကို ပြန်ဖယ်ထုတ်ပေးမည်
+    # (ဒါမှ ကိုယ့်ပုံအသစ်ကို သူတို့ ပြန်မြင်ရမှာ ဖြစ်ပါတယ်)
+    # -------------------------------------------------------------
+    await users_collection.update_many(
+        {}, # User အကုန်လုံးဆီမှာ ရှာမယ်
+        {"$pull": {"passed": user_id}} # passed array ထဲကနေ လက်ရှိ user_id ကို ဆွဲထုတ်ဖျက်ပစ်မယ်
+    )
+    
     await update.message.reply_text(
-        "🎉 Profile အောင်မြင်စွာ တည်ဆောက်ပြီးပါပြီ!\nအောက်ပါ Menu ခလုတ်များမှတစ်ဆင့် အလွယ်တကူ စတင်အသုံးပြုနိုင်ပါပြီ။",
+        "🎉 Profile အောင်မြင်စွာ တည်ဆောက်/ပြင်ဆင်ပြီးပါပြီ!\nအောက်ပါ Menu ခလုတ်များမှတစ်ဆင့် အလွယ်တကူ စတင်အသုံးပြုနိုင်ပါပြီ။",
         reply_markup=get_main_menu()
     )
     
-    # -------------------------------------------------------------
-    # Log Channel သို့ လူသစ်ရောက်ကြောင်း ပို့မည့်အပိုင်း
-    # -------------------------------------------------------------
+    # Log Channel သို့ လူသစ်ရောက်ကြောင်း ဓာတ်ပုံနှင့် ပို့မည့်အပိုင်း
     username_str = f"@{update.message.from_user.username}" if update.message.from_user.username else "မရှိပါ"
     
     log_text = (
-        f"🆕 <b>User အသစ် ဝင်ရောက်လာပါပြီ!</b>\n"
+        f"🆕 <b>User Profile အသစ် / ပြင်ဆင်မှု!</b>\n"
         f"👤 အမည်: {context.user_data['name']}\n"
         f"💬 Username: {username_str}\n"
         f"🚻 ကျား/မ: {context.user_data['gender']}\n"
@@ -249,6 +256,7 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
         if target_user:
             await users_collection.update_one({"user_id": current_user['user_id']}, {"$set": {"passed": []}})
 
+    # ... (အပေါ်က Code တွေက အရင်အတိုင်းပါ)
     if target_user:
         # သီးသန့် အကောင့်အခြေအနေ (Status) ဖန်တီးခြင်း
         status = "✅ အတည်ပြုပြီး (Verified User)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
@@ -281,13 +289,24 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             )
         else:
             await update.message.reply_photo(photo=target_user['photo_id'], caption=caption, reply_markup=reply_markup)
+            
+    # -------------------------------------------------------------
+    # Empty States: လူမရှိတော့လျှင် Profile ပြင်ရန် တိုက်တွန်းမည့်အပိုင်း
+    # -------------------------------------------------------------
     else:
-        text = "😔 လောလောဆယ် သင့်အတွက် ကိုက်ညီမယ့်သူ အသစ်မရှိတော့ပါ။ ခဏနေမှ /match ကို ပြန်နှိပ်ကြည့်ပါ!"
+        text = (
+            "🏜️ <b>လောလောဆယ် သင့်အတွက် ကိုက်ညီမယ့်သူ ကုန်သွားပါပြီ!</b>\n\n"
+            "💡 <b>အကြံပြုချက်:</b> သင့် Profile ဓာတ်ပုံကို ပိုမိုက်တဲ့ပုံ ပြောင်းခြင်း၊ မြို့နှင့် အချက်အလက်များ ပြင်ဆင်ခြင်းဖြင့် လူသစ်များနှင့် Match ပိုရနိုင်ပါတယ်။"
+        )
+        # Profile ပြင်ရန် Button ကို တစ်ခါတည်း ထည့်ပေးထားမည်
+        keyboard = [[InlineKeyboardButton("✏️ Profile ပြင်ဆင်မည်", callback_data="edit_profile")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
         if is_callback:
             await update.callback_query.message.delete()
-            await context.bot.send_message(chat_id=update.callback_query.message.chat_id, text=text)
+            await context.bot.send_message(chat_id=update.callback_query.message.chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup)
         else:
-            await update.message.reply_text(text)
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
 
 async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/match (သို့) 🔍 Match ရှာမည် နှိပ်လျှင် အလုပ်လုပ်မည့် Function"""
