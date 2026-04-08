@@ -433,6 +433,10 @@ async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 upsert=True
             )
             
+            # --- (ဒီနှစ်ကြောင်းကို မဖြစ်မနေ ထပ်တိုးပေးပါ) ---
+            context.user_data.pop('last_viewed_user_id', None)
+            context.user_data.pop('last_match_msg_id', None)
+            
             # ၃ ခါပြည့်စစ်ဆေးခြင်း
             updated_user = await users_collection.find_one({"user_id": user_id})
             pass_count = updated_user.get("pass_counts", {}).get(target_str_id, 0)
