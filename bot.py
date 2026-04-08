@@ -341,9 +341,9 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             target_user = doc
             
         if target_user:
-        status = "✅ Verified User (အတည်ပြုပြီး)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
-        
-        caption = (
+            status = "✅ Verified User (အတည်ပြုပြီး)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+            
+            caption = (
             f"👤 အမည်: <b>{target_user['name']}</b>, {target_user.get('age', '-')} နှစ်\n"
             f"📍 မြို့: {target_user.get('city', 'မသိပါ')}\n"
             f"🚻 ကျား/မ: {target_user['gender']}\n"
@@ -423,14 +423,16 @@ async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Like/Pass မနှိပ်ဘဲ Match ကို ထပ်နှိပ်ရင် "Pass" လုပ်တယ်လို့ အလိုအလျောက် သတ်မှတ်မယ် (နောက်တစ်ယောက်ကို ပြောင်းပြအောင်လို့ပါ)
         if 'last_viewed_user_id' in context.user_data:
             last_viewed_id = context.user_data['last_viewed_user_id']
-            target_str_id = str(last_viewed_id)
             
-            await users_collection.update_one(
-                {"user_id": user_id},
-                {
-                    "$addToSet": {"passed": last_viewed_id},
-                    "$inc": {f"pass_counts.{target_str_id}": 1}
-                }
+            # Array အစား interactions_collection သစ်ကို အသုံးပြု၍ Auto-Pass လုပ်ခြင်း
+            interaction = await interactions_collection.find_one({"user_id": user_id, "target_id": last_viewed_id})
+            pass_count = interaction.get("pass_count", 0) + 1 if interaction else 1
+            final_action = "hard_pass" if pass_count >= 3 else "pass"
+            
+            await interactions_collection.update_one(
+                {"user_id": user_id, "target_id": last_viewed_id},
+                {"$set": {"action": final_action, "pass_count": pass_count}},
+                upsert=True
             )
             
             # ၃ ခါပြည့်စစ်ဆေးခြင်း
@@ -1322,6 +1324,9 @@ def main():
     # Match Command နဲ့ Like/Pass Action 
     application.add_handler(CommandHandler("match", match_command))
     application.add_handler(CallbackQueryHandler(handle_action, pattern="^(like_|pass_|superlike_|report_|ban_)"))
+    
+    # Blue Tick Verification Admin Action
+    application.add_handler(CallbackQueryHandler(handle_verify_action, pattern="^verify_"))
     
     # My Profile Commands 
     application.add_handler(CommandHandler("myprofile", my_profile))
