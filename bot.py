@@ -306,20 +306,18 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
     if current_user.get('city'):
         query_city = match_query.copy()
         query_city['city'] = current_user['city']
-        cursor = users_collection.aggregate([{"$match": query_city}, {"$sample": {"size": 1}}])
-        async for doc in cursor:
-            target_user = doc
+        docs = await users_collection.aggregate([{"$match": query_city}, {"$sample": {"size": 1}}]).to_list(length=1)
+        if docs:
+            target_user = docs[0]
 
     # Priority 2: မြို့တူသူ မရှိတော့ပါက ကျန်သည့်မြို့များထဲမှ ကျပန်း (Random) ဆွဲထုတ်ခြင်း
     if not target_user:
-        cursor = users_collection.aggregate([{"$match": match_query}, {"$sample": {"size": 1}}])
-        async for doc in cursor:
-            target_user = doc
+        docs = await users_collection.aggregate([{"$match": match_query}, {"$sample": {"size": 1}}]).to_list(length=1)
+        if docs:
+            target_user = docs[0]
     
     # Priority 3: လူကုန်သွားပါက ကိုယ် Pass ခဲ့သူများကို Second Chance အနေဖြင့် ပြန်ပြပေးခြင်း
-    # "pass" အကြိမ်ရေ ၃ ခါမပြည့်သေးသူများကို ပြန်ပြပေးမည်ဖြစ်သည် (hard_pass မဟုတ်သူများ)
     if not target_user:
-        # Match, Like, Hard_Pass လုပ်ထားသူများကိုသာ ပြန်ရှာမည် (သာမန် Pass များကို ချန်လှပ်ထားမည်)
         strict_interactions = await interactions_collection.find({
             "user_id": current_user['user_id'],
             "action": {"$in": ["match", "like", "superlike", "hard_pass"]}
@@ -336,14 +334,14 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             query_second['gender'] = current_user['looking_for']
         query_second['looking_for'] = {"$in": [current_user['gender'], "Both"]}
         
-        cursor = users_collection.aggregate([{"$match": query_second}, {"$sample": {"size": 1}}])
-        async for doc in cursor:
-            target_user = doc
+        docs = await users_collection.aggregate([{"$match": query_second}, {"$sample": {"size": 1}}]).to_list(length=1)
+        if docs:
+            target_user = docs[0]
             
-        if target_user:
-            status = "✅ Verified User (အတည်ပြုပြီး)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
-            
-            caption = (
+    if target_user:
+        status = "✅ Verified User (အတည်ပြုပြီး)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+        
+        caption = (
             f"👤 အမည်: <b>{target_user['name']}</b>, {target_user.get('age', '-')} နှစ်\n"
             f"📍 မြို့: {target_user.get('city', 'မသိပါ')}\n"
             f"🚻 ကျား/မ: {target_user['gender']}\n"
