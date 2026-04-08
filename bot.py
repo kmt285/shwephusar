@@ -341,10 +341,6 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             target_user = doc
             
         if target_user:
-            # Pass စာရင်းကို Reset ချပေးမည်
-
-    # --- Profile ပြသမည့် အပိုင်း ---
-        if target_user:
         status = "✅ Verified User (အတည်ပြုပြီး)" if target_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
         
         caption = (
