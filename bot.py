@@ -45,9 +45,9 @@ def get_main_menu():
     keyboard = [
         [KeyboardButton("🔍 Match ရှာမည် 💖")],
         [KeyboardButton("👤 ကျွန်ုပ်၏ Profile"), KeyboardButton("👀 လျှို့ဝှက် Like များ")],
-        [KeyboardButton("🎁 နေ့စဉ် Coin ယူမည်"), KeyboardButton("✅ အကောင့်အတည်ပြုရန်")]
+        [KeyboardButton("🎁 နေ့စဉ် Coin ယူမည်"), KeyboardButton("💎 VIP / Coin ဝယ်မည်")],
+        [KeyboardButton("🤝 သူငယ်ချင်းကို ဖိတ်မည်"), KeyboardButton("✅ အကောင့်အတည်ပြုရန်")]
     ]
-    # resize_keyboard က ခလုတ်ကို ဖုန်းစခရင်နဲ့ ကွက်တိဖြစ်အောင် ညှိပေးပြီး၊ is_persistent က အမြဲပေါ်နေအောင် လုပ်ပေးပါတယ်
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 async def send_log(context: ContextTypes.DEFAULT_TYPE, message: str, photo_id: str = None):
@@ -75,6 +75,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if existing_user and existing_user.get("is_banned"):
         await update.message.reply_text("🚫 သင့်အကောင့်သည် စည်းမျဉ်းချိုးဖောက်မှုများကြောင့် ပိတ်ပင်ခံထားရပါသည်။")
         return ConversationHandler.END
+
+    # --- (Referral System Logic) ---
+    # User အသစ်ဖြစ်မှသာ Referral ကို လက်ခံမည် (User အဟောင်းတွေ လိမ်နှိပ်လို့ မရအောင် ကာကွယ်ခြင်း)
+    if not existing_user and context.args and context.args[0].startswith("ref_"):
+        try:
+            referrer_id = int(context.args[0].split("_")[1])
+            if referrer_id != user_id: # ကိုယ့်ကိုယ်ကိုယ် ပြန် Invite လုပ်ခြင်းကို ကာကွယ်ခြင်း
+                context.user_data['referrer_id'] = referrer_id
+        except: pass
 
     if not update.message.from_user.username:
         await update.message.reply_text(
@@ -155,6 +164,10 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     photo_file_id = update.message.photo[-1].file_id
     user_id = update.message.from_user.id
     
+    # ဖိတ်ခေါ်ထားသူ ရှိ/မရှိ စစ်ဆေးပြီး ရှိပါက User သစ်အတွက် Coin 10 (ပုံမှန် 5 + ဘောနပ်စ် 5) ပေးမည်
+    referrer_id = context.user_data.get('referrer_id')
+    initial_coins = 10 if referrer_id else 5
+    
     await users_collection.update_one(
         {"user_id": user_id},
         {
@@ -167,7 +180,7 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "city": context.user_data['city'],
                 "bio": context.user_data['bio'],
                 "photo_id": photo_file_id,
-                "passed": [], # <--- (၁) ကိုယ့်ရဲ့ Pass စာရင်းကို အသစ်ပြန်ဖျက်ပေးမည်
+                "passed": [], 
                 "is_editing": False 
             },
             "$setOnInsert": {
@@ -175,13 +188,24 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "matches": [],
                 "hard_passed": [],
                 "pass_counts": {},
-                "coins": 5,          
+                "coins": initial_coins,  # <--- ဒီနေရာမှာ ပြင်ထားပါတယ်      
                 "last_daily": None,
                 "is_verified": False 
             }
         },
         upsert=True
     )
+    
+    # --- (ဖိတ်ခေါ်ခဲ့သော သူငယ်ချင်းအား 5 Coins ဆုချမည့် အပိုင်း) ---
+    if referrer_id:
+        await users_collection.update_one({"user_id": referrer_id}, {"$inc": {"coins": 5}})
+        try:
+            await context.bot.send_message(
+                chat_id=referrer_id,
+                text="🎉 <b>ဂုဏ်ယူပါတယ်။</b> သင့်ဖိတ်ခေါ်လင့်ခ်မှ သူငယ်ချင်းတစ်ယောက် Profile ဖွင့်ပြီးသွားလို့ <b>5 Coins</b> လက်ဆောင်ရရှိသွားပါပြီ။",
+                parse_mode="HTML"
+            )
+        except: pass
     
     # -------------------------------------------------------------
     # (၂) သူများတွေရဲ့ Pass စာရင်းထဲကနေ ကိုယ့်ကို ပြန်ဖယ်ထုတ်ပေးမည်
@@ -239,7 +263,22 @@ async def prompt_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔄 အစကနေ ပြန်စလိုပါက: /start ကို နှိပ်ပါ။"
     )
 
+async def invite_friend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🤝 သူငယ်ချင်းကို ဖိတ်မည် ကိုနှိပ်လျှင် Referral Link ထုတ်ပေးမည့် Function"""
+    user_id = update.message.from_user.id
+    bot_username = context.bot.username
+    
+    # မိမိ၏ သီးသန့် Referral Link ဖန်တီးခြင်း
+    invite_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
 
+    text = (
+        "🤝 <b>သူငယ်ချင်းကို ဖိတ်ခေါ်ပြီး အခမဲ့ Coin များ ရယူပါ!</b>\n\n"
+        "အောက်ပါ Link ကို Copy ကူးပြီး သင့်သူငယ်ချင်းများထံ ပေးပို့လိုက်ပါ။\n\n"
+        "သင့် Link မှတစ်ဆင့် သူငယ်ချင်းတစ်ယောက် Bot တွင် <b>Profile ဖွင့်ပြီးတိုင်း</b> သင့်အတွက် <b>5 Coins</b> နှင့် သူငယ်ချင်းအတွက် <b>5 Coins</b> (စုစုပေါင်း 10 Coins) လက်ဆောင်ရရှိပါမည်။ 🎁\n\n"
+        f"🔗 <b>သင့်၏ ဖိတ်ခေါ်လင့်ခ်:</b>\n<code>{invite_link}</code>"
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+    
 # ==========================================
 # 2. Matching Engine (Priority Logic ဖြင့်)
 # ==========================================
@@ -473,10 +512,16 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action = "pass"
 
     if action == "superlike":
-        if current_user.get("coins", 0) < 3:
-            await query.answer("❌ Super Like ပေးရန် Coin ၃ ခု လိုအပ်ပါသည်။ /daily နှိပ်၍ အခမဲ့ရယူပါ။", show_alert=True)
+        is_vip = current_user.get("is_vip", False)
+        # VIP မဟုတ်ရင် Coin ၃ ခု လိုမယ်၊ VIP ဆိုရင် အခမဲ့
+        if current_user.get("coins", 0) < 3 and not is_vip:
+            await query.answer("❌ Super Like ပေးရန် Coin ၃ ခု လိုအပ်ပါသည်။ /daily နှိပ်၍ အခမဲ့ရယူပါ။ (သို့) VIP ဝယ်ယူပါ။", show_alert=True)
             return
-        await users_collection.update_one({"user_id": current_user_id}, {"$inc": {"coins": -3}})
+        
+        # VIP မဟုတ်မှသာ Coin နုတ်မည်
+        if not is_vip:
+            await users_collection.update_one({"user_id": current_user_id}, {"$inc": {"coins": -3}})
+            
         await query.answer("🌟 Super Like အောင်မြင်စွာ ပို့လိုက်ပါပြီ!", show_alert=True)
     else:
         await query.answer()
@@ -908,9 +953,11 @@ async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     current_user = await users_collection.find_one({"user_id": user_id})
     coins = current_user.get('coins', 0)
+    is_vip = current_user.get('is_vip', False)
 
-    if coins < 1:
-        await query.message.edit_text("❌ Coin မလောက်ပါ။ /daily ကိုနှိပ်ပြီး နေ့စဉ်အခမဲ့ Coin ရယူနိုင်ပါတယ်။")
+    # VIP လည်း မဟုတ်၊ Coin လည်း မရှိရင် တားမည်
+    if coins < 1 and not is_vip:
+        await query.message.edit_text("❌ Coin မလောက်ပါ။ /daily ကိုနှိပ်ပြီး အခမဲ့ယူပါ (သို့) VIP ဝယ်ယူပါ။")
         return
 
     seen_by_me = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', [])
@@ -922,18 +969,15 @@ async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     likers = await pending_likers_cursor.to_list(length=None)
 
-    if not likers:
-        await query.message.edit_text("😔 လောလောဆယ် ပြစရာလူ မရှိတော့ပါ။")
-        return
-
-    await users_collection.update_one({"user_id": user_id}, {"$inc": {"coins": -1}})
+    # VIP မဟုတ်လျှင်သာ Coin နုတ်မည်
+    if not is_vip:
+        await users_collection.update_one({"user_id": user_id}, {"$inc": {"coins": -1}})
+        text_msg = f"✅ <b>Coin 1 ခု သုံးပြီး သင့်ကို Like ထားသူ ({len(likers)}) ယောက်ကို ဖွင့်ပြလိုက်ပါပြီ!</b>\n(လက်ကျန် Coin: {coins - 1} စေ့)"
+    else:
+        text_msg = f"👑 <b>VIP အခွင့်အရေးဖြင့် သင့်ကို Like ထားသူ ({len(likers)}) ယောက်ကို အခမဲ့ ဖွင့်ပြလိုက်ပါပြီ!</b>"
 
     await query.message.delete()
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=f"✅ <b>Coin 1 ခု သုံးပြီး သင့်ကို Like ထားသူ ({len(likers)}) ယောက်ကို ဖွင့်ပြလိုက်ပါပြီ!</b>\n(လက်ကျန် Coin: {coins - 1} စေ့)",
-        parse_mode="HTML"
-    )
+    await context.bot.send_message(chat_id=user_id, text=text_msg, parse_mode="HTML")
 
     for liker in likers:
         # သီးသန့် အကောင့်အခြေအနေ (Status) ဖန်တီးခြင်း
@@ -991,6 +1035,56 @@ async def daily_reward(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     new_coins = current_user.get('coins', 0) + 1
     await update.message.reply_text(f"🎁 နေ့စဉ်လက်ဆောင် 1 Coin ရရှိပါသည်! ယခု လက်ကျန်: {new_coins} Coin")
+
+async def buy_coin_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """💎 VIP / Coin ဝယ်မည် ကိုနှိပ်လျှင် ပေါ်လာမည့် စာသား"""
+    text = (
+        "💎 <b>VIP နှင့် Coin ဝယ်ယူရန်</b> 💎\n\n"
+        "Coin များဝယ်ယူပြီး ဖူးစာရှင်ကို ပိုမိုမြန်ဆန်စွာ ရှာဖွေလိုက်ပါ!\n\n"
+        "🪙 <b>Coin ဈေးနှုန်းများ</b>\n"
+        "🔸 15 Coins - 1,000 ကျပ်\n"
+        "🔸 50 Coins - 3,000 ကျပ်\n"
+        "🔸 100 Coins - 5,000 ကျပ်\n\n"
+        "👑 <b>VIP Package (၁ လစာ - 10,000 ကျပ်)</b>\n"
+        "- Super Like များ အကန့်အသတ်မရှိ အခမဲ့ပေးနိုင်ခြင်း\n"
+        "- မိမိကို Like ထားသူများကို အခမဲ့ အမြဲတမ်းကြည့်နိုင်ခြင်း\n\n"
+        "💳 <b>ငွေလွှဲရန် အကောင့်များ</b>\n"
+        "🔹 KPay: 09123456789 (U Mya)\n"
+        "🔹 WavePay: 09123456789 (U Mya)\n\n"
+        "✅ <b>ဝယ်ယူနည်း</b>\n"
+        f"ငွေလွှဲပြီးပါက ငွေလွှဲပြေစာ (Screenshot) နှင့် သင့် User ID: <code>{update.message.from_user.id}</code> ကို Admin <b>@YourAdminUsername</b> ထံသို့ ပို့ပေးပါ။ Admin မှ စစ်ဆေးပြီး မိနစ်အနည်းငယ်အတွင်း Coin ထည့်ပေးပါမည်။"
+    )
+    # @YourAdminUsername နေရာတွင် သင့်အကောင့်အစစ်ကို ပြောင်းထည့်ပါ။
+    await update.message.reply_text(text, parse_mode="HTML")
+
+async def add_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin မှ User သို့ Coin ထည့်ပေးမည့် Function (/addcoin)"""
+    if str(update.message.from_user.id) != str(ADMIN_ID):
+        return
+    try:
+        target_id = int(context.args[0])
+        amount = int(context.args[1])
+        await users_collection.update_one({"user_id": target_id}, {"$inc": {"coins": amount}})
+        await update.message.reply_text(f"✅ User ID: {target_id} သို့ Coin {amount} ခု ထည့်ပေးပြီးပါပြီ။")
+        try: # User ထံ အသိပေးမည်
+            await context.bot.send_message(chat_id=target_id, text=f"🎉 <b>ဂုဏ်ယူပါတယ်။</b> သင့်အကောင့်သို့ Coin {amount} ခု ရောက်ရှိလာပါပြီ။", parse_mode="HTML")
+        except: pass
+    except:
+        await update.message.reply_text("⚠️ အသုံးပြုပုံ: /addcoin [User_ID] [Coin_အရေအတွက်]")
+
+async def add_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin မှ User ကို VIP ပေးမည့် Function (/addvip)"""
+    if str(update.message.from_user.id) != str(ADMIN_ID):
+        return
+    try:
+        target_id = int(context.args[0])
+        await users_collection.update_one({"user_id": target_id}, {"$set": {"is_vip": True}})
+        await update.message.reply_text(f"✅ User ID: {target_id} ကို VIP အဖြစ် သတ်မှတ်ပေးပြီးပါပြီ။")
+        try:
+            await context.bot.send_message(chat_id=target_id, text="👑 <b>ဂုဏ်ယူပါတယ်။</b> သင်သည် ယခုမှစ၍ VIP User တစ်ယောက်ဖြစ်သွားပါပြီ! အခမဲ့ Super Like များကို စိတ်ကြိုက်အသုံးပြုနိုင်ပါပြီ။", parse_mode="HTML")
+        except: pass
+    except:
+        await update.message.reply_text("⚠️ အသုံးပြုပုံ: /addvip [User_ID]")
 
 # ==========================================
 # 6. Help Command & Bot Menu Setup
@@ -1235,6 +1329,10 @@ def main():
     application.add_handler(MessageHandler(filters.Regex("^👤 ကျွန်ုပ်၏ Profile$"), my_profile))
     application.add_handler(MessageHandler(filters.Regex("^👀 လျှို့ဝှက် Like များ$"), check_likes_command))
     application.add_handler(MessageHandler(filters.Regex("^🎁 နေ့စဉ် Coin ယူမည်$"), daily_reward))
+    application.add_handler(MessageHandler(filters.Regex("^💎 VIP / Coin ဝယ်မည်$"), buy_coin_info))
+    application.add_handler(CommandHandler("addcoin", add_coin))
+    application.add_handler(CommandHandler("addvip", add_vip))
+    application.add_handler(MessageHandler(filters.Regex("^🤝 သူငယ်ချင်းကို ဖိတ်မည်$"), invite_friend))
     
     # Help Menu
     application.add_handler(CommandHandler("help", help_command))
