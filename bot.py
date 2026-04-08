@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 db_client = AsyncIOMotorClient(MONGO_URI)
 db = db_client.match_bot_db
 users_collection = db.users
+interactions_collection = db.interactions
 
 NAME, GENDER, LOOKING_FOR, AGE, CITY, BIO, PHOTO = range(7)
 EDIT_CHOICE, PARTIAL_TEXT, PARTIAL_PHOTO = range(7, 10)
@@ -208,13 +209,11 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         except: pass
     
     # -------------------------------------------------------------
-    # (၂) သူများတွေရဲ့ Pass စာရင်းထဲကနေ ကိုယ့်ကို ပြန်ဖယ်ထုတ်ပေးမည်
-    # (ဒါမှ ကိုယ့်ပုံအသစ်ကို သူတို့ ပြန်မြင်ရမှာ ဖြစ်ပါတယ်)
-    # -------------------------------------------------------------
-    await users_collection.update_many(
-        {}, # User အကုန်လုံးဆီမှာ ရှာမယ်
-        {"$pull": {"passed": user_id}} # passed array ထဲကနေ လက်ရှိ user_id ကို ဆွဲထုတ်ဖျက်ပစ်မယ်
-    )
+    # ဓာတ်ပုံအသစ်တင်လိုက်ပါက သူများတွေဆီမှာ ပြန်ပေါ်စေရန် Pass လုပ်ထားသော စာရင်းကို ဖျက်ပစ်မည်
+    await interactions_collection.delete_many({
+        "target_id": user_id, 
+        "action": {"$in": ["pass", "hard_pass"]}
+    })
     
     await update.message.reply_text(
         "🎉 Profile အောင်မြင်စွာ တည်ဆောက်/ပြင်ဆင်ပြီးပါပြီ!\nအောက်ပါ Menu ခလုတ်များမှတစ်ဆင့် အလွယ်တကူ စတင်အသုံးပြုနိုင်ပါပြီ။",
@@ -284,7 +283,9 @@ async def invite_friend(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 
 async def show_next_profile(current_user, update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
-    seen_users = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
+    # မိမိ Like, Pass, Match လုပ်ထားဖူးသူ အားလုံးကို ဆွဲထုတ်မည်
+    my_interactions = await interactions_collection.find({"user_id": current_user['user_id']}).to_list(length=None)
+    seen_users = [doc['target_id'] for doc in my_interactions]
     seen_users.append(current_user['user_id']) 
     
     # Base Query: ကိုယ်ကြည့်ပြီးသားမဟုတ်သူ၊ Active ဖြစ်သူ၊ Ban မခံထားရသူ
@@ -316,8 +317,14 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             target_user = doc
     
     # Priority 3: လူကုန်သွားပါက ကိုယ် Pass ခဲ့သူများကို Second Chance အနေဖြင့် ပြန်ပြပေးခြင်း
-    if not target_user and current_user.get('passed'):
-        second_chance_seen = current_user.get('likes', []) + current_user.get('matches', []) + current_user.get('hard_passed', [])
+    # "pass" အကြိမ်ရေ ၃ ခါမပြည့်သေးသူများကို ပြန်ပြပေးမည်ဖြစ်သည် (hard_pass မဟုတ်သူများ)
+    if not target_user:
+        # Match, Like, Hard_Pass လုပ်ထားသူများကိုသာ ပြန်ရှာမည် (သာမန် Pass များကို ချန်လှပ်ထားမည်)
+        strict_interactions = await interactions_collection.find({
+            "user_id": current_user['user_id'],
+            "action": {"$in": ["match", "like", "superlike", "hard_pass"]}
+        }).to_list(length=None)
+        second_chance_seen = [doc['target_id'] for doc in strict_interactions]
         second_chance_seen.append(current_user['user_id'])
         
         query_second = {
@@ -335,7 +342,6 @@ async def show_next_profile(current_user, update: Update, context: ContextTypes.
             
         if target_user:
             # Pass စာရင်းကို Reset ချပေးမည်
-            await users_collection.update_one({"user_id": current_user['user_id']}, {"$set": {"passed": []}})
 
     # --- Profile ပြသမည့် အပိုင်း ---
     if target_user:
@@ -511,98 +517,99 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Report တင်ပြီးသည်နှင့် ထိုသူကို မမြင်ရတော့အောင် Pass ခလုတ်နှိပ်သကဲ့သို့ အလိုအလျောက် ပြောင်းပေးမည်
         action = "pass"
 
-    if action == "superlike":
-        is_vip = current_user.get("is_vip", False)
-        # VIP မဟုတ်ရင် Coin ၃ ခု လိုမယ်၊ VIP ဆိုရင် အခမဲ့
-        if current_user.get("coins", 0) < 3 and not is_vip:
-            await query.answer("❌ Super Like ပေးရန် Coin ၃ ခု လိုအပ်ပါသည်။ /daily နှိပ်၍ အခမဲ့ရယူပါ။ (သို့) VIP ဝယ်ယူပါ။", show_alert=True)
-            return
-        
-        # VIP မဟုတ်မှသာ Coin နုတ်မည်
-        if not is_vip:
-            await users_collection.update_one({"user_id": current_user_id}, {"$inc": {"coins": -3}})
-            
-        await query.answer("🌟 Super Like အောင်မြင်စွာ ပို့လိုက်ပါပြီ!", show_alert=True)
-    else:
-        await query.answer()
+    # --- (၃) MATCH, LIKE, PASS LOGIC ပြောင်းလဲခြင်း ---
+    if action in ["superlike", "like", "pass"]:
+        if action == "superlike":
+            is_vip = current_user.get("is_vip", False)
+            if current_user.get("coins", 0) < 3 and not is_vip:
+                await query.answer("❌ Super Like ပေးရန် Coin ၃ ခု လိုအပ်ပါသည်။ /daily နှိပ်၍ အခမဲ့ရယူပါ။ (သို့) VIP ဝယ်ယူပါ။", show_alert=True)
+                return
+            if not is_vip:
+                await users_collection.update_one({"user_id": current_user_id}, {"$inc": {"coins": -3}})
+            await query.answer("🌟 Super Like အောင်မြင်စွာ ပို့လိုက်ပါပြီ!", show_alert=True)
+        else:
+            await query.answer()
 
-    if action == "pass":
-        target_str_id = str(target_user_id)
-        await users_collection.update_one(
-            {"user_id": current_user_id},
-            {
-                "$addToSet": {"passed": target_user_id},
-                "$inc": {f"pass_counts.{target_str_id}": 1}
-            }
-        )
-        updated_user = await users_collection.find_one({"user_id": current_user_id})
-        pass_count = updated_user.get("pass_counts", {}).get(target_str_id, 0)
-        
-        if pass_count >= 3:
-            await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"hard_passed": target_user_id}})
-
-    elif action in ["like", "superlike"]:
-        await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"likes": target_user_id}})
-        
-        target_user = await users_collection.find_one({"user_id": target_user_id})
-        is_match = target_user and current_user_id in target_user.get("likes", [])
-
-        if is_match:
-            await users_collection.update_one({"user_id": current_user_id}, {"$addToSet": {"matches": target_user_id}})
-            await users_collection.update_one({"user_id": target_user_id}, {"$addToSet": {"matches": current_user_id}})
+        if action == "pass":
+            # Pass လုပ်ပါက အကြိမ်ရေကို မှတ်ထားပြီး ၃ ခါပြည့်ပါက hard_pass အဖြစ် ပြောင်းမည်
+            interaction = await interactions_collection.find_one({"user_id": current_user_id, "target_id": target_user_id})
+            pass_count = interaction.get("pass_count", 0) + 1 if interaction else 1
+            final_action = "hard_pass" if pass_count >= 3 else "pass"
             
-            target_username = f"@{target_user['username']}" if target_user.get('username') else f"<a href='tg://user?id={target_user['user_id']}'>{target_user['name']}</a>"
-            await context.bot.send_message(chat_id=current_user_id, text=f"🎉 <b>Match ဖြစ်သွားပါပြီ!</b>\nသင်နဲ့ {target_user['name']} တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {target_username}", parse_mode="HTML")
-            
-            current_username = f"@{current_user['username']}" if current_user.get('username') else f"<a href='tg://user?id={current_user['user_id']}'>{current_user['name']}</a>"
-            try:
-                await context.bot.send_message(chat_id=target_user_id, text=f"🎉 <b>Match အသစ် ရပါပြီ!</b>\n{current_user['name']} နဲ့ သင်တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {current_username}", parse_mode="HTML")
-            except Forbidden:
-                # Bot ကို Block ထားပါက Database တွင် အမှတ်အသားပြုမည်
-                await users_collection.update_one({"user_id": target_user_id}, {"$set": {"is_active": False}})
-            except: pass
-
-            # -------------------------------------------------------------
-            # Log Channel သို့ Match ဖြစ်ကြောင်း ပို့မည့်အပိုင်း
-            curr_uname = f"@{current_user['username']}" if current_user.get('username') else "မရှိပါ"
-            tgt_uname = f"@{target_user['username']}" if target_user.get('username') else "မရှိပါ"
-            
-            log_text = (
-                f"💞 <b>Match အသစ် ဖြစ်သွားပါပြီ!</b>\n"
-                f"1️⃣ {current_user['name']} ({curr_uname}) - <code>{current_user_id}</code>\n"
-                f"2️⃣ {target_user['name']} ({tgt_uname}) - <code>{target_user_id}</code>"
+            await interactions_collection.update_one(
+                {"user_id": current_user_id, "target_id": target_user_id},
+                {"$set": {"action": final_action, "pass_count": pass_count}},
+                upsert=True
             )
-            # Match ဖြစ်သူ နှစ်ယောက်ထဲမှ လက်ရှိ Action ယူသူ၏ ပုံကို ပူးတွဲပို့ပါမည်
-            await send_log(context, log_text, photo_id=current_user['photo_id'])
 
-        elif action == "superlike":
-            status = "✅ အတည်ပြုပြီး (Verified User)" if current_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
-            caption = (
-                f"🌟 <b>WOW! သင့်ကို တစ်စုံတစ်ယောက်က Super Like 🌟 ပေးလိုက်ပါတယ်။</b>\n\n"
-                f"👤 အမည်: {current_user['name']}, {current_user.get('age', '-')} နှစ်\n"
-                f"📍 မြို့: {current_user.get('city', 'မသိပါ')}\n"
-                f"🚻 ကျား/မ: {current_user['gender']}\n"
-                f"🛡️ အကောင့်အခြေအနေ: {status}\n"
-                f"📝 Bio: {current_user.get('bio', 'မရှိပါ')}"
-            )
-            keyboard = [
-                [
-                    InlineKeyboardButton("❌ Pass", callback_data=f"pass_{current_user_id}"),
-                    InlineKeyboardButton("❤️ Match ပြန်လုပ်မည်", callback_data=f"like_{current_user_id}")
-                ]
-            ]
-            try:
-                await context.bot.send_photo(
-                    chat_id=target_user_id,
-                    photo=current_user['photo_id'],
-                    caption=caption,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode="HTML"
+        elif action in ["like", "superlike"]:
+            # တစ်ဖက်လူက ကိုယ့်ကို Like ထားပြီးသားလား အရင်စစ်မည်
+            target_interaction = await interactions_collection.find_one({
+                "user_id": target_user_id, 
+                "target_id": current_user_id,
+                "action": {"$in": ["like", "superlike"]}
+            })
+            
+            target_user = await users_collection.find_one({"user_id": target_user_id})
+
+            if target_interaction:
+                # နှစ်ဦးသား Match ဖြစ်သွားပါပြီ
+                await interactions_collection.update_one(
+                    {"user_id": current_user_id, "target_id": target_user_id},
+                    {"$set": {"action": "match"}}, upsert=True
                 )
-            except Forbidden:
-                await users_collection.update_one({"user_id": target_user_id}, {"$set": {"is_active": False}})
-            except Exception as e:
-                logger.error(f"Failed to send superlike notification to {target_user_id}: {e}")
+                await interactions_collection.update_one(
+                    {"user_id": target_user_id, "target_id": current_user_id},
+                    {"$set": {"action": "match"}}, upsert=True
+                )
+                
+                target_username = f"@{target_user['username']}" if target_user.get('username') else f"<a href='tg://user?id={target_user['user_id']}'>{target_user['name']}</a>"
+                await context.bot.send_message(chat_id=current_user_id, text=f"🎉 <b>Match ဖြစ်သွားပါပြီ!</b>\nသင်နဲ့ {target_user['name']} တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {target_username}", parse_mode="HTML")
+                
+                current_username = f"@{current_user['username']}" if current_user.get('username') else f"<a href='tg://user?id={current_user['user_id']}'>{current_user['name']}</a>"
+                try:
+                    await context.bot.send_message(chat_id=target_user_id, text=f"🎉 <b>Match အသစ် ရပါပြီ!</b>\n{current_user['name']} နဲ့ သင်တို့ နှစ်ဦးသဘောတူ Match ဖြစ်သွားပါပြီ。\nစကားသွားပြောရန်: {current_username}", parse_mode="HTML")
+                except Forbidden:
+                    await users_collection.update_one({"user_id": target_user_id}, {"$set": {"is_active": False}})
+                except: pass
+
+                # Log Channel သို့ Match ဖြစ်ကြောင်း ပို့မည်
+                curr_uname = f"@{current_user['username']}" if current_user.get('username') else "မရှိပါ"
+                tgt_uname = f"@{target_user['username']}" if target_user.get('username') else "မရှိပါ"
+                log_text = f"💞 <b>Match အသစ် ဖြစ်သွားပါပြီ!</b>\n1️⃣ {current_user['name']} ({curr_uname}) - <code>{current_user_id}</code>\n2️⃣ {target_user['name']} ({tgt_uname}) - <code>{target_user_id}</code>"
+                await send_log(context, log_text, photo_id=current_user['photo_id'])
+
+            else:
+                # Target က Like မထားဘူးဆိုရင် ကိုယ်က Like ကြောင်း မှတ်သားမည်
+                await interactions_collection.update_one(
+                    {"user_id": current_user_id, "target_id": target_user_id},
+                    {"$set": {"action": action}}, upsert=True
+                )
+
+                if action == "superlike":
+                    status = "✅ အတည်ပြုပြီး (Verified User)" if current_user.get("is_verified") else "❌ အတည်မပြုရသေးပါ"
+                    caption = (
+                        f"🌟 <b>WOW! သင့်ကို တစ်စုံတစ်ယောက်က Super Like 🌟 ပေးလိုက်ပါတယ်။</b>\n\n"
+                        f"👤 အမည်: {current_user['name']}, {current_user.get('age', '-')} နှစ်\n"
+                        f"📍 မြို့: {current_user.get('city', 'မသိပါ')}\n"
+                        f"🚻 ကျား/မ: {current_user['gender']}\n"
+                        f"🛡️ အကောင့်အခြေအနေ: {status}\n"
+                        f"📝 Bio: {current_user.get('bio', 'မရှိပါ')}"
+                    )
+                    keyboard = [
+                        [
+                            InlineKeyboardButton("❌ Pass", callback_data=f"pass_{current_user_id}"),
+                            InlineKeyboardButton("❤️ Match ပြန်လုပ်မည်", callback_data=f"like_{current_user_id}")
+                        ]
+                    ]
+                    try:
+                        await context.bot.send_photo(
+                            chat_id=target_user_id, photo=current_user['photo_id'],
+                            caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML"
+                        )
+                    except Forbidden:
+                        await users_collection.update_one({"user_id": target_user_id}, {"$set": {"is_active": False}})
+                    except: pass
                 
     await context.bot.send_chat_action(chat_id=current_user_id, action=ChatAction.TYPING)
     
@@ -922,13 +929,14 @@ async def check_likes_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not current_user:
         await update.message.reply_text("သင့်မှာ Profile မရှိသေးပါ။ /start ကိုနှိပ်ပါ။")
         return
-
-    # ကိုယ့်ကို Like ထားပြီး ကိုယ်က ပြန်မ Like, မ Pass ရသေးတဲ့သူတွေကို ရှာမယ်
-    seen_by_me = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', [])
+        
+    my_interactions = await interactions_collection.find({"user_id": user_id}).to_list(length=None)
+    seen_by_me = [doc['target_id'] for doc in my_interactions]
     
-    # အရေအတွက်ကိုပဲ အရင်ရေတွက်မယ်
-    likers_count = await users_collection.count_documents({
-        "likes": user_id,
+    # ကိုယ့်ကို Like / Superlike ပေးထားပြီး ကိုယ်က မမြင်ရသေးတဲ့သူတွေကို ရေတွက်မည်
+    likers_count = await interactions_collection.count_documents({
+        "target_id": user_id,
+        "action": {"$in": ["like", "superlike"]},
         "user_id": {"$nin": seen_by_me}
     })
 
@@ -960,14 +968,22 @@ async def handle_reveal_like(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.message.edit_text("❌ Coin မလောက်ပါ။ /daily ကိုနှိပ်ပြီး အခမဲ့ယူပါ (သို့) VIP ဝယ်ယူပါ။")
         return
 
-    seen_by_me = current_user.get('likes', []) + current_user.get('passed', []) + current_user.get('matches', [])
+    # ကိုယ်နဲ့ Interaction လုပ်ထားပြီးသား (Action ယူပြီးသား) လူတွေကို ယူမည်
+    my_interactions = await interactions_collection.find({"user_id": user_id}).to_list(length=None)
+    seen_by_me = [doc['target_id'] for doc in my_interactions]
     
-    pending_likers_cursor = users_collection.find({
-        "likes": user_id,
+    # ကိုယ့်ကို Like ထားပြီး ကိုယ်မမြင်ရသေးသူ ၅ ယောက်ကို ဆွဲထုတ်မည်
+    pending_likers_cursor = interactions_collection.find({
+        "target_id": user_id,
+        "action": {"$in": ["like", "superlike"]},
         "user_id": {"$nin": seen_by_me}
     }).limit(5)
     
-    likers = await pending_likers_cursor.to_list(length=None)
+    liker_interactions = await pending_likers_cursor.to_list(length=None)
+    liker_ids = [doc['user_id'] for doc in liker_interactions]
+    
+    # User အချက်အလက်များကို users_collection မှ ပြန်ရှာမည်
+    likers = await users_collection.find({"user_id": {"$in": liker_ids}}).to_list(length=None)
 
     # VIP မဟုတ်လျှင်သာ Coin နုတ်မည်
     if not is_vip:
